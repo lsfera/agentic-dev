@@ -1,0 +1,17 @@
+# Mounted project folders — not part of the tool itself
+ws/
+
+# Generated devcontainer env (paths, persist dir)
+.devcontainer/.env
+
+# Sandcastle orchestrator runtime (secrets, logs, ephemeral worktrees)
+.sandcastle/.env
+.sandcastle/logs/
+.sandcastle/worktrees/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
+**/.DS_Store

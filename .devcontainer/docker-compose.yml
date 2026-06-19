@@ -1,0 +1,64 @@
+services:
+  devcontainer:
+    # Stable name so the docker MCP server (mcp-server-docker) can target it via a
+    # fixed map (ALLOWED_CONTAINERS=devcontainer:agentic-sandbox). One sandbox at a
+    # time; up.sh removes any prior one first.
+    container_name: agentic-sandbox
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Workspace — Compose does not auto-mount the project; declared explicitly.
+      # Both vars are written to .env by init.sh; WORKSPACE_FOLDER must match
+      # "workspaceFolder" in devcontainer.json.
+      # consistency: cached = host is authoritative, container reads may briefly lag.
+      # (No-op on modern Docker Desktop/VirtioFS, but correct intent + helps on osxfs.)
+      - type: bind
+        source: ${LOCAL_WORKSPACE_FOLDER}
+        target: ${WORKSPACE_FOLDER}
+        consistency: cached
+
+      # Path-matched mirror of the SAME project dir at its real host path (ADR-0011).
+      # The sandcastle orchestrator runs from here so the git worktrees it creates
+      # (<project>/.sandcastle/worktrees/...) carry host-resolvable paths — otherwise
+      # docker-outside-of-docker rejects the inner-sandbox bind mount ("mounts denied",
+      # path not known to the host daemon). Humans/editor keep using ${WORKSPACE_FOLDER};
+      # only the orchestrator cds here. Harmless extra mount for non-sandcastle projects.
+      - type: bind
+        source: ${LOCAL_WORKSPACE_FOLDER}
+        target: ${LOCAL_WORKSPACE_FOLDER}
+        consistency: cached
+
+      # SSH keys — read-only for private git access.
+      # System-wide known_hosts are baked into the MS base image.
+      - type: bind
+        source: ${SSH_DIR}
+        target: /home/vscode/.ssh
+        read_only: true
+        bind:
+          create_host_path: true
+
+      # Claude Code config, MCP registrations, memory — shared across rebuilds.
+      - type: bind
+        source: ${CLAUDE_PERSIST_HOST_DIR}
+        target: /home/vscode/.claude-persist
+        bind:
+          create_host_path: true
+
+      # Host Docker socket. The docker-outside-of-docker feature (devcontainer.json)
+      # installs the CLI and fixes the socket group for the vscode user at startup,
+      # so no group_add / DOCKER_GID is needed here.
+      - type: bind
+        source: ${DOCKER_SOCK:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+
+    working_dir: ${WORKSPACE_FOLDER}
+    command: sleep infinity
+
+networks:
+  # Rename Compose's default network from "<project>_default" to a fixed,
+  # human-named "devcontainer-network". The sole service auto-attaches to the
+  # default network, so the sandbox lands on devcontainer-network — and other
+  # containers (testcontainers Postgres, pgAdmin, …) can join it by name.
+  default:
+    name: devcontainer-network

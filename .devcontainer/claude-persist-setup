@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Redirect Claude Code's config and data to the mounted persist directory.
+# Runs at container creation (postCreateCommand) — idempotent.
+#
+# Mount layout (docker-compose.yml):
+#   host: $CLAUDE_PERSIST_HOST_DIR/
+#   container: /home/vscode/.claude-persist/
+#
+# After this script:
+#   ~/.claude.json  ->  /home/vscode/.claude-persist/claude.json
+#   ~/.claude/      ->  /home/vscode/.claude-persist/data/
+set -euo pipefail
+
+PERSIST_DIR="/home/vscode/.claude-persist"
+
+if [ ! -d "$PERSIST_DIR" ]; then
+  echo "Warning: $PERSIST_DIR is not mounted — Claude Code data will NOT persist." >&2
+  exit 0
+fi
+
+PERSIST_JSON="${PERSIST_DIR}/claude.json"
+PERSIST_DATA="${PERSIST_DIR}/data"
+
+mkdir -p "$PERSIST_DATA"
+
+if [ -e "${HOME}/.claude.json" ] && [ ! -L "${HOME}/.claude.json" ]; then
+  [ -s "${HOME}/.claude.json" ] && cp -f "${HOME}/.claude.json" "${PERSIST_JSON}"
+  rm -f "${HOME}/.claude.json"
+fi
+[ -f "${PERSIST_JSON}" ] || echo '{}' > "${PERSIST_JSON}"
+[ -L "${HOME}/.claude.json" ] || ln -sf "${PERSIST_JSON}" "${HOME}/.claude.json"
+
+if [ -d "${HOME}/.claude" ] && [ ! -L "${HOME}/.claude" ]; then
+  cp -an "${HOME}/.claude/." "${PERSIST_DATA}/"
+  rm -rf "${HOME}/.claude"
+fi
+[ -L "${HOME}/.claude" ] || ln -sf "${PERSIST_DATA}" "${HOME}/.claude"
+
+echo "Claude Code data redirected → ${PERSIST_DIR}"
