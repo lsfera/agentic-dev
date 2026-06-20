@@ -21,7 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { reduce, READY_LABEL, type State } from "./reduce.ts";
+import { reduce, READY_LABEL, type State, type Pr } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 
@@ -40,12 +40,37 @@ async function main(): Promise<void> {
   });
 
   const inFlight: number[] = [];
+  // Tracks the set of issue ids whose PRs have already been processed via
+  // PrMerged to avoid re-emitting Relabel on every subsequent tick.
+  const seenMerged = new Set<number>();
 
   for (;;) {
+    // Detect newly merged PRs and unblock dependent issues (#2).
+    const mergedPrs = await issues.listMergedPrs();
+    for (const pr of mergedPrs) {
+      if (!seenMerged.has(pr.issue)) {
+        seenMerged.add(pr.issue);
+        const allIssues = await issues.listAll();
+        const unblockState: State = {
+          issues: allIssues,
+          prs: mergedPrs,
+          inFlight,
+          policy: { concurrency: 1, mode: "afk" },
+        };
+        const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
+        for (const action of unblockActions) {
+          if (action.type === "Relabel") {
+            console.log(`[afk] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
+            await issues.addLabel(action.issueId, action.label);
+          }
+        }
+      }
+    }
+
     const ready = await issues.listReady();
     const state: State = {
       issues: ready,
-      prs: [], // slice 1 does not yet track open PRs in state (#5)
+      prs: mergedPrs,
       inFlight,
       policy: { concurrency: 1, mode: "afk" },
     };
