@@ -21,7 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { reduce, READY_LABEL, type State, type Pr } from "./reduce.ts";
+import { reduce, READY_LABEL, type State, type Pr, type Policy } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 
@@ -44,18 +44,23 @@ async function main(): Promise<void> {
   // PrMerged to avoid re-emitting Relabel on every subsequent tick.
   const seenMerged = new Set<number>();
 
+  const policy: Policy = { concurrency: 1, mode: "afk" };
+
   for (;;) {
-    // Detect newly merged PRs and unblock dependent issues (#2).
     const mergedPrs = await issues.listMergedPrs();
+    const openPrs = await issues.listOpenPrs();
+    const allPrs = [...mergedPrs, ...openPrs];
+
+    // Detect newly merged PRs and unblock dependent issues (#2).
     for (const pr of mergedPrs) {
       if (!seenMerged.has(pr.issue)) {
         seenMerged.add(pr.issue);
         const allIssues = await issues.listAll();
         const unblockState: State = {
           issues: allIssues,
-          prs: mergedPrs,
+          prs: allPrs,
           inFlight,
-          policy: { concurrency: 1, mode: "afk" },
+          policy,
         };
         const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
         for (const action of unblockActions) {
@@ -70,9 +75,9 @@ async function main(): Promise<void> {
     const ready = await issues.listReady();
     const state: State = {
       issues: ready,
-      prs: mergedPrs,
+      prs: allPrs,
       inFlight,
-      policy: { concurrency: 1, mode: "afk" },
+      policy,
     };
 
     const actions = reduce(state, { type: "Tick" });
@@ -84,20 +89,39 @@ async function main(): Promise<void> {
 
     const start = actions.find((a) => a.type === "StartSandbox");
     if (!start || start.type !== "StartSandbox") {
-      // No slot free this tick (shouldn't happen in serial slice 1); bail safe.
-      console.log("[afk] no startable work this tick — done.");
-      return;
+      // No sandbox to start this tick — either waiting for CI on open PRs or
+      // all slots are occupied. Sleep briefly and poll again.
+      console.log("[afk] waiting for CI on pending PRs...");
+      await new Promise<void>((r) => setTimeout(r, 60_000));
+      continue;
     }
 
     const n = start.issueId;
     inFlight.push(n);
+    let openedPr: Pr | null = null;
     try {
-      await processIssue(n, issues, runner, base, repoRoot);
+      openedPr = await processIssue(n, issues, runner, base, repoRoot);
     } catch (err) {
       console.error(`[afk] #${n} failed:`, err);
       // Leave the issue claimed (label removed) for a human to inspect.
     } finally {
       inFlight.splice(inFlight.indexOf(n), 1);
+    }
+
+    if (openedPr) {
+      const finishState: State = {
+        issues: ready,
+        prs: [...allPrs, openedPr],
+        inFlight,
+        policy,
+      };
+      const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
+      for (const action of finishActions) {
+        if (action.type === "EnableAutoMerge") {
+          console.log(`[afk] #${n} → enabling auto-merge`);
+          await issues.enableAutoMerge(action.pr.issue);
+        }
+      }
     }
   }
 }
@@ -108,7 +132,7 @@ async function processIssue(
   runner: SandboxRunner,
   base: string,
   repoRoot: string,
-): Promise<void> {
+): Promise<Pr | null> {
   const issue = await issues.get(n);
 
   // Claim: drop the ready label so the next tick won't re-pick this issue.
@@ -131,7 +155,7 @@ async function processIssue(
       "AFK agent produced no commits — leaving this issue unlabelled for a " +
         "human to inspect and re-label `ready-for-agent` if appropriate.",
     );
-    return;
+    return null;
   }
 
   // Orchestrator-side push (over the devcontainer's mounted SSH key) + PR.
@@ -148,6 +172,7 @@ async function processIssue(
   });
   await issues.comment(n, `Implemented in an isolated sandbox; opened ${prUrl}.`);
   console.log(`[afk] #${n} → ${prUrl}`);
+  return { issue: n, ciStatus: "pending", merged: false };
 }
 
 await main();

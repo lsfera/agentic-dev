@@ -8,7 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reduce, READY_LABEL, type State, type CiStatus } from "./reduce.ts";
+import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
 
 const base = (over: Partial<State> = {}): State => ({
@@ -57,13 +57,15 @@ test("issue already in flight is not restarted, and we do not Stop", () => {
   assert.deepEqual(reduce(state, { type: "Tick" }), []);
 });
 
-test("issue with an existing PR is not restarted", () => {
+test("issue with an existing PR is not restarted, and loop stays alive for auto-merge", () => {
   const state = base({
     issues: [{ id: 1, labels: [READY_LABEL], blockedBy: [] }],
     prs: [{ issue: 1, ciStatus: "pending", merged: false }],
   });
-  // No other ready work and nothing running -> quiet -> Stop.
-  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+  // Open PR keeps the afk loop alive (awaiting auto-merge); no StartSandbox emitted.
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "open PR keeps loop alive");
+  assert.ok(!actions.some((a) => a.type === "StartSandbox"), "issue already has a PR");
 });
 
 // ─── parseBlockedBy ──────────────────────────────────────────────────────────
@@ -109,12 +111,15 @@ test("issue with no blockers (blockedBy: []) behaves as before", () => {
   ]);
 });
 
-test("issue blocked by unmerged PR is not started", () => {
+test("issue blocked by unmerged PR is not started, loop stays alive for auto-merge", () => {
   const state = base({
     issues: [{ id: 2, labels: [READY_LABEL], blockedBy: [1] }],
     prs: [{ issue: 1, ciStatus: "pending" as CiStatus, merged: false }],
   });
-  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+  // Issue 2 can't start yet, but blocker 1's open PR keeps the afk loop alive.
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "open PR keeps loop alive");
+  assert.ok(!actions.some((a) => a.type === "StartSandbox"), "issue 2 is still blocked");
 });
 
 test("issue blocked by absent PR (blocker not yet done) is not started", () => {
@@ -135,7 +140,7 @@ test("issue with all blockers merged is started", () => {
   ]);
 });
 
-test("partially merged blockers keep issue blocked", () => {
+test("partially merged blockers keep issue blocked, loop stays alive for remaining auto-merge", () => {
   const state = base({
     issues: [{ id: 3, labels: [READY_LABEL], blockedBy: [1, 2] }],
     prs: [
@@ -143,7 +148,10 @@ test("partially merged blockers keep issue blocked", () => {
       { issue: 2, ciStatus: "pending" as CiStatus, merged: false },
     ],
   });
-  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+  // Issue 3 is still blocked (blocker 2 not merged), but open PR keeps loop alive.
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "open PR keeps loop alive");
+  assert.ok(!actions.some((a) => a.type === "StartSandbox"), "issue 3 is still blocked");
 });
 
 // ─── PrMerged event ──────────────────────────────────────────────────────────
@@ -195,6 +203,44 @@ test("PrMerged unblocks all fully-resolved dependents in one call", () => {
   assert.deepEqual(actions.length, 2);
   assert.ok(actions.some((a) => a.type === "Relabel" && a.type === "Relabel" && (a as { issueId: number }).issueId === 2));
   assert.ok(actions.some((a) => a.type === "Relabel" && (a as { issueId: number }).issueId === 3));
+});
+
+// ─── SandboxFinished / EnableAutoMerge / WaitForHuman ───────────────────────
+
+test("afk mode + SandboxFinished → EnableAutoMerge", () => {
+  const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
+  const state = base({ policy: { concurrency: 1, mode: "afk" } });
+  assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
+    { type: "EnableAutoMerge", pr },
+  ]);
+});
+
+test("hitl mode + SandboxFinished → WaitForHuman", () => {
+  const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
+  const state = base({ policy: { concurrency: 1, mode: "hitl" } });
+  assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
+    { type: "WaitForHuman", pr },
+  ]);
+});
+
+test("afk mode + Tick with open PR and nothing else ready → no Stop (waiting for CI)", () => {
+  const state = base({
+    issues: [{ id: 1, labels: [], blockedBy: [] }],
+    prs: [{ issue: 1, ciStatus: "pending", merged: false }],
+    policy: { concurrency: 1, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "should not Stop while PR is pending auto-merge");
+});
+
+test("Tick with pending CI on open PR does not emit EnableAutoMerge", () => {
+  const state = base({
+    issues: [{ id: 1, labels: [], blockedBy: [] }],
+    prs: [{ issue: 1, ciStatus: "pending", merged: false }],
+    policy: { concurrency: 1, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "EnableAutoMerge"), "Tick should not emit EnableAutoMerge");
 });
 
 // ─── Demo: two-issue chain A blocks B ────────────────────────────────────────

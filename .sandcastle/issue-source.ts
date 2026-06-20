@@ -88,6 +88,29 @@ export class IssueSource {
       .filter((pr): pr is import("./reduce.ts").Pr => pr !== null);
   }
 
+  /** Open PRs from `agent/issue-N` branches, mapped back to issue ids. */
+  async listOpenPrs(): Promise<import("./reduce.ts").Pr[]> {
+    const { stdout } = await this.gh([
+      "pr", "list",
+      "--state", "open",
+      "--json", "number,headRefName",
+    ]);
+    const raw = JSON.parse(stdout) as { number: number; headRefName: string }[];
+    return raw
+      .map((pr) => {
+        const m = pr.headRefName.match(/issue-(\d+)$/);
+        return m
+          ? { issue: parseInt(m[1], 10), ciStatus: "pending" as import("./reduce.ts").CiStatus, merged: false }
+          : null;
+      })
+      .filter((pr): pr is import("./reduce.ts").Pr => pr !== null);
+  }
+
+  /** Enable GitHub-native auto-merge on the PR for the given issue. */
+  async enableAutoMerge(issueId: number): Promise<void> {
+    await this.gh(["pr", "merge", `agent/issue-${issueId}`, "--auto", "--squash"]);
+  }
+
   async get(n: number): Promise<GhIssue> {
     const { stdout } = await this.gh([
       "issue", "view", String(n),
