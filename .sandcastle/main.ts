@@ -21,7 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { reduce, type State } from "./reduce.ts";
+import { reduce, READY_LABEL, type State } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 
@@ -87,7 +87,7 @@ async function processIssue(
   const issue = await issues.get(n);
 
   // Claim: drop the ready label so the next tick won't re-pick this issue.
-  await issues.removeLabel(n, "ready-for-agent");
+  await issues.removeLabel(n, READY_LABEL);
   console.log(`[afk] #${n} "${issue.title}" claimed → sandbox`);
 
   const outcome = await runner.runIssue(issue);
@@ -98,11 +98,14 @@ async function processIssue(
   );
 
   if (outcome.commits.length === 0) {
+    // Leave the issue claimed (label stays off) so the poll loop does not
+    // re-pick a persistently-failing issue every tick. A human re-labels it
+    // after inspecting. (Automated backoff/retry is later work, not slice 1.)
     await issues.comment(
       n,
-      "AFK agent produced no commits. Re-labelling `ready-for-agent` for retry.",
+      "AFK agent produced no commits — leaving this issue unlabelled for a " +
+        "human to inspect and re-label `ready-for-agent` if appropriate.",
     );
-    await issues.addLabel(n, "ready-for-agent");
     return;
   }
 

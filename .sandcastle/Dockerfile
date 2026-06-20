@@ -1,10 +1,14 @@
 FROM node:22-bookworm
 
-# System dependencies for the agent's checkout + commit work.
+# Lean inner image (ADR-0002): git for the agent's checkout + commit work, and
+# curl only to install the Claude Code CLI below. No `gh` and no SSH mount in
+# slice 1 — the orchestrator pushes the branch and opens the PR with the outer
+# devcontainer's gh + SSH auth (ADR-0004 "Status — deferred in slice 1"), so the
+# agent never needs them. Add a project FROM/derived image if a project needs
+# more toolchain (ADR-0002).
 RUN apt-get update && apt-get install -y \
   git \
   curl \
-  jq \
   && rm -rf /var/lib/apt/lists/*
 
 # Build-args for UID/GID alignment: sandcastle's image build defaults these to

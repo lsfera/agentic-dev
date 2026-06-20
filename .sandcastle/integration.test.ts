@@ -48,5 +48,19 @@ test(
       outcome.commits.length >= 1,
       `expected >=1 commit, got ${outcome.commits.length}`,
     );
+    // The completion signal must fire — that is what stops the agent instead of
+    // looping to the iteration cap and producing duplicate commits (issue #1:
+    // "stops on the completion signal without duplicate commits"). A run that
+    // hit the cap would have completed === false.
+    assert.equal(
+      outcome.completed,
+      true,
+      "agent should stop on the completion signal, not the iteration cap",
+    );
+    // Guard the single-line task against runaway duplicate commits.
+    assert.ok(
+      outcome.commits.length <= 2,
+      `expected a tight commit count for a one-line change, got ${outcome.commits.length}`,
+    );
   },
 );
