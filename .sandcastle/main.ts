@@ -119,7 +119,13 @@ async function main(): Promise<void> {
       for (const action of finishActions) {
         if (action.type === "EnableAutoMerge") {
           console.log(`[afk] #${n} → enabling auto-merge`);
-          await issues.enableAutoMerge(action.pr.issue);
+          try {
+            await issues.enableAutoMerge(action.pr.issue);
+          } catch (err) {
+            // A config gap (auto-merge disabled, no required check) must not
+            // crash the orchestrator — the PR stays open for a human to merge.
+            console.error(`[afk] #${n} could not enable auto-merge:`, err);
+          }
         }
       }
     }
