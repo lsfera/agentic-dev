@@ -12,6 +12,17 @@ import { READY_LABEL, type Issue } from "./reduce.ts";
 
 const exec = promisify(execFile);
 
+/** Parse "Blocked by #N" references from an issue body (one or many). */
+export function parseBlockedBy(body: string): number[] {
+  const idx = body.search(/blocked\s+by\b/i);
+  if (idx < 0) return [];
+  const rest = body.slice(idx);
+  // Stop at the next markdown section header, if any.
+  const end = rest.search(/\n##/);
+  const section = end < 0 ? rest : rest.slice(0, end);
+  return [...section.matchAll(/#(\d+)/g)].map((m) => parseInt(m[1], 10));
+}
+
 export interface GhIssue {
   readonly number: number;
   readonly title: string;
@@ -28,21 +39,53 @@ export class IssueSource {
     return exec("gh", full, { maxBuffer: 16 * 1024 * 1024 });
   }
 
-  /** Open issues carrying the ready label. blockedBy is empty in slice 1;
-   *  dependency parsing arrives with issue #2. */
+  /** Open issues carrying the ready label, with dependency refs parsed from body. */
   async listReady(): Promise<Issue[]> {
     const { stdout } = await this.gh([
       "issue", "list",
       "--state", "open",
       "--label", READY_LABEL,
-      "--json", "number,labels",
+      "--json", "number,labels,body",
     ]);
-    const raw = JSON.parse(stdout) as { number: number; labels: { name: string }[] }[];
+    const raw = JSON.parse(stdout) as { number: number; labels: { name: string }[]; body: string }[];
     return raw.map((r) => ({
       id: r.number,
       labels: r.labels.map((l) => l.name),
-      blockedBy: [],
+      blockedBy: parseBlockedBy(r.body),
     }));
+  }
+
+  /** All open issues (regardless of label), with dependency refs parsed. */
+  async listAll(): Promise<Issue[]> {
+    const { stdout } = await this.gh([
+      "issue", "list",
+      "--state", "open",
+      "--json", "number,labels,body",
+    ]);
+    const raw = JSON.parse(stdout) as { number: number; labels: { name: string }[]; body: string }[];
+    return raw.map((r) => ({
+      id: r.number,
+      labels: r.labels.map((l) => l.name),
+      blockedBy: parseBlockedBy(r.body),
+    }));
+  }
+
+  /** Merged PRs opened from `agent/issue-N` branches, mapped back to issue ids. */
+  async listMergedPrs(): Promise<import("./reduce.ts").Pr[]> {
+    const { stdout } = await this.gh([
+      "pr", "list",
+      "--state", "merged",
+      "--json", "number,headRefName",
+    ]);
+    const raw = JSON.parse(stdout) as { number: number; headRefName: string }[];
+    return raw
+      .map((pr) => {
+        const m = pr.headRefName.match(/issue-(\d+)$/);
+        return m
+          ? { issue: parseInt(m[1], 10), ciStatus: "success" as import("./reduce.ts").CiStatus, merged: true }
+          : null;
+      })
+      .filter((pr): pr is import("./reduce.ts").Pr => pr !== null);
   }
 
   async get(n: number): Promise<GhIssue> {

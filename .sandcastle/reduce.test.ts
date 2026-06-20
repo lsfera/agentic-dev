@@ -8,7 +8,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reduce, READY_LABEL, type State } from "./reduce.ts";
+import { reduce, READY_LABEL, type State, type CiStatus } from "./reduce.ts";
+import { parseBlockedBy } from "./issue-source.ts";
 
 const base = (over: Partial<State> = {}): State => ({
   issues: [],
@@ -63,4 +64,176 @@ test("issue with an existing PR is not restarted", () => {
   });
   // No other ready work and nothing running -> quiet -> Stop.
   assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+});
+
+// ─── parseBlockedBy ──────────────────────────────────────────────────────────
+
+test("parseBlockedBy: empty body returns []", () => {
+  assert.deepEqual(parseBlockedBy(""), []);
+});
+
+test("parseBlockedBy: no blocked-by section returns []", () => {
+  assert.deepEqual(parseBlockedBy("This is a regular issue body."), []);
+});
+
+test("parseBlockedBy: single inline reference", () => {
+  assert.deepEqual(parseBlockedBy("Blocked by #1"), [1]);
+});
+
+test("parseBlockedBy: multiple inline references", () => {
+  assert.deepEqual(parseBlockedBy("Blocked by #1, #2"), [1, 2]);
+});
+
+test("parseBlockedBy: GitHub markdown section format", () => {
+  assert.deepEqual(
+    parseBlockedBy("## Blocked by\n\n- #1\n- #2\n"),
+    [1, 2],
+  );
+});
+
+test("parseBlockedBy: stops at next markdown section", () => {
+  assert.deepEqual(
+    parseBlockedBy("## Blocked by\n\n- #1\n\n## Other section\n\n- #99\n"),
+    [1],
+  );
+});
+
+// ─── Dependency blocking (isReady + Tick) ────────────────────────────────────
+
+test("issue with no blockers (blockedBy: []) behaves as before", () => {
+  const state = base({
+    issues: [{ id: 1, labels: [READY_LABEL], blockedBy: [] }],
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 1 },
+  ]);
+});
+
+test("issue blocked by unmerged PR is not started", () => {
+  const state = base({
+    issues: [{ id: 2, labels: [READY_LABEL], blockedBy: [1] }],
+    prs: [{ issue: 1, ciStatus: "pending" as CiStatus, merged: false }],
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+});
+
+test("issue blocked by absent PR (blocker not yet done) is not started", () => {
+  const state = base({
+    issues: [{ id: 2, labels: [READY_LABEL], blockedBy: [1] }],
+    prs: [],
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+});
+
+test("issue with all blockers merged is started", () => {
+  const state = base({
+    issues: [{ id: 2, labels: [READY_LABEL], blockedBy: [1] }],
+    prs: [{ issue: 1, ciStatus: "success" as CiStatus, merged: true }],
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 2 },
+  ]);
+});
+
+test("partially merged blockers keep issue blocked", () => {
+  const state = base({
+    issues: [{ id: 3, labels: [READY_LABEL], blockedBy: [1, 2] }],
+    prs: [
+      { issue: 1, ciStatus: "success" as CiStatus, merged: true },
+      { issue: 2, ciStatus: "pending" as CiStatus, merged: false },
+    ],
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+});
+
+// ─── PrMerged event ──────────────────────────────────────────────────────────
+
+test("PrMerged unblocks a dependent issue when all its blockers are now merged", () => {
+  const mergedPr = { issue: 1, ciStatus: "success" as CiStatus, merged: true };
+  const state = base({
+    issues: [{ id: 2, labels: [], blockedBy: [1] }],
+    prs: [],
+  });
+  assert.deepEqual(reduce(state, { type: "PrMerged", pr: mergedPr }), [
+    { type: "Relabel", issueId: 2, label: READY_LABEL },
+  ]);
+});
+
+test("PrMerged does not unblock when a different blocker is still unmerged", () => {
+  const mergedPr = { issue: 1, ciStatus: "success" as CiStatus, merged: true };
+  const state = base({
+    issues: [{ id: 3, labels: [], blockedBy: [1, 2] }],
+    prs: [{ issue: 2, ciStatus: "pending" as CiStatus, merged: false }],
+  });
+  assert.deepEqual(reduce(state, { type: "PrMerged", pr: mergedPr }), []);
+});
+
+test("PrMerged unblocks only issues whose blocker is the merged PR", () => {
+  const mergedPr = { issue: 1, ciStatus: "success" as CiStatus, merged: true };
+  const state = base({
+    issues: [
+      { id: 2, labels: [], blockedBy: [1] }, // blocked by 1 → unblocked
+      { id: 3, labels: [], blockedBy: [4] }, // blocked by 4 → still blocked
+    ],
+    prs: [],
+  });
+  assert.deepEqual(reduce(state, { type: "PrMerged", pr: mergedPr }), [
+    { type: "Relabel", issueId: 2, label: READY_LABEL },
+  ]);
+});
+
+test("PrMerged unblocks all fully-resolved dependents in one call", () => {
+  const mergedPr = { issue: 1, ciStatus: "success" as CiStatus, merged: true };
+  const state = base({
+    issues: [
+      { id: 2, labels: [], blockedBy: [1] },
+      { id: 3, labels: [], blockedBy: [1] },
+    ],
+    prs: [],
+  });
+  const actions = reduce(state, { type: "PrMerged", pr: mergedPr });
+  assert.deepEqual(actions.length, 2);
+  assert.ok(actions.some((a) => a.type === "Relabel" && a.type === "Relabel" && (a as { issueId: number }).issueId === 2));
+  assert.ok(actions.some((a) => a.type === "Relabel" && (a as { issueId: number }).issueId === 3));
+});
+
+// ─── Demo: two-issue chain A blocks B ────────────────────────────────────────
+
+test("demo: A blocks B — A starts first; after A merges, B enters ready-set", () => {
+  // Step 1: only A has ready-for-agent; B is blocked (no label yet)
+  const step1 = base({
+    issues: [
+      { id: 1, labels: [READY_LABEL], blockedBy: [] },
+      { id: 2, labels: [], blockedBy: [1] },
+    ],
+    prs: [],
+  });
+  assert.deepEqual(reduce(step1, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 1 },
+  ]);
+
+  // Step 2: A's PR merges → reducer emits Relabel for B
+  const mergedA = { issue: 1, ciStatus: "success" as CiStatus, merged: true };
+  const step2 = base({
+    issues: [
+      { id: 1, labels: [], blockedBy: [] },
+      { id: 2, labels: [], blockedBy: [1] },
+    ],
+    prs: [],
+  });
+  assert.deepEqual(reduce(step2, { type: "PrMerged", pr: mergedA }), [
+    { type: "Relabel", issueId: 2, label: READY_LABEL },
+  ]);
+
+  // Step 3: orchestrator adds label; next Tick starts B (A's PR is merged in state)
+  const step3 = base({
+    issues: [
+      { id: 1, labels: [], blockedBy: [] },
+      { id: 2, labels: [READY_LABEL], blockedBy: [1] },
+    ],
+    prs: [mergedA],
+  });
+  assert.deepEqual(reduce(step3, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 2 },
+  ]);
 });

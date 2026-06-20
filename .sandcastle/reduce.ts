@@ -69,20 +69,44 @@ export function reduce(state: State, event: Event): Action[] {
   switch (event.type) {
     case "Tick":
       return onTick(state);
-    // PrMerged / SandboxFinished / SandboxFailed land in later slices (#5).
+    case "PrMerged":
+      return onPrMerged(state, event.pr);
+    // SandboxFinished / SandboxFailed land in later slices (#5).
     default:
       return [];
   }
 }
 
-/** An issue is workable now when it carries the ready label, has no sandbox
- *  running, and has no PR open yet. (Dependency gating is slice #2.) */
+/** An issue is workable when it carries the ready label, has no sandbox
+ *  running, has no PR open yet, and every blocker has a merged PR. */
 function isReady(issue: Issue, state: State): boolean {
+  const mergedIds = new Set(
+    state.prs.filter((pr) => pr.merged).map((pr) => pr.issue),
+  );
   return (
     issue.labels.includes(READY_LABEL) &&
     !state.inFlight.includes(issue.id) &&
-    !state.prs.some((pr) => pr.issue === issue.id)
+    !state.prs.some((pr) => pr.issue === issue.id) &&
+    issue.blockedBy.every((id) => mergedIds.has(id))
   );
+}
+
+/** When a PR merges, emit Relabel for any issue whose every blocker is now
+ *  merged — including the one that just merged. The orchestrator executes the
+ *  Relabel so the next Tick picks the issue up as ready. */
+function onPrMerged(state: State, mergedPr: Pr): Action[] {
+  const mergedIds = new Set(
+    state.prs.filter((pr) => pr.merged).map((pr) => pr.issue),
+  );
+  mergedIds.add(mergedPr.issue);
+
+  return state.issues
+    .filter(
+      (issue) =>
+        issue.blockedBy.includes(mergedPr.issue) &&
+        issue.blockedBy.every((id) => mergedIds.has(id)),
+    )
+    .map((issue) => ({ type: "Relabel", issueId: issue.id, label: READY_LABEL }));
 }
 
 function onTick(state: State): Action[] {
