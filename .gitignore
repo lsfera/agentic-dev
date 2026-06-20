@@ -6,6 +6,7 @@ ws/
 
 # Sandcastle orchestrator runtime (secrets, logs, ephemeral worktrees)
 .sandcastle/.env
+.sandcastle/orchestrator.env
 .sandcastle/logs/
 .sandcastle/worktrees/
 
