@@ -7,12 +7,18 @@ old host-sub-agent loop is gone — the engine now lives in `.sandcastle/`.
 
 ## Prereqs (one-time)
 
+- Bring the devcontainer up for this repo root (the dogfood "repo works on
+  itself" case): `./up.sh .` on the host. The `github-cli` devcontainer feature
+  installs `gh`; the `~/.ssh` mount provides git push auth.
 - `.sandcastle/.env` contains `CLAUDE_CODE_OAUTH_TOKEN` (mint on the host with
-  `claude setup-token`). See `.sandcastle/.env.example`.
+  `claude setup-token`). See `.sandcastle/.env.example`. This is injected into
+  the inner sandboxes.
+- `.sandcastle/orchestrator.env` contains `GH_TOKEN` for the orchestrator's own
+  `gh` calls (issues/labels/PRs). See `.sandcastle/orchestrator.env.example`.
+  Kept separate from `.sandcastle/.env` so the token never reaches the sandboxes.
 - The inner image exists. Build it once inside the devcontainer:
   `/exec` → `docker build -t sandcastle:local -f .sandcastle/Dockerfile .sandcastle`
   (or `npx @ai-hero/sandcastle build-image`).
-- `gh` and SSH are authenticated in the devcontainer (origin is over SSH).
 
 ## Run
 
@@ -24,12 +30,15 @@ so the worktrees sandcastle creates resolve under docker-outside-of-docker
 ```
 cd "$LOCAL_WORKSPACE_FOLDER" \
   && (cd .sandcastle && npm install) \
+  && set -a && . .sandcastle/orchestrator.env && set +a \
   && AGENTIC_MODE=afk ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
 ```
 
 `cd "$LOCAL_WORKSPACE_FOLDER"` keeps the orchestrator's `process.cwd()` (and
 thus sandcastle's `cwd`) on the host-resolvable path; invoking `.sandcastle`'s
 own `tsx` resolves `@ai-hero/sandcastle` from `.sandcastle/node_modules`.
+Sourcing `orchestrator.env` puts `GH_TOKEN` in the orchestrator's environment so
+its `gh` calls authenticate; it is not forwarded to the sandboxes.
 
 ## Behavior
 
