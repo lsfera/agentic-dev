@@ -1,66 +1,54 @@
 # /afk
 
-Autonomous implementation loop. Runs without human input until all issues are done.
+Autonomous implementation. Thin wrapper around the **sandcastle orchestrator**:
+it runs inside the outer devcontainer and works each `ready-for-agent` GitHub
+issue in its own disposable, git-isolated sandbox, opening a PR per issue. The
+old host-sub-agent loop is gone — the engine now lives in `.sandcastle/`.
 
-## Loop
+## Prereqs (one-time)
 
-Repeat until no open `ready-for-agent` issues remain:
+- `.sandcastle/.env` contains `CLAUDE_CODE_OAUTH_TOKEN` (mint on the host with
+  `claude setup-token`). See `.sandcastle/.env.example`.
+- The inner image exists. Build it once inside the devcontainer:
+  `/exec` → `docker build -t sandcastle:local -f .sandcastle/Dockerfile .sandcastle`
+  (or `npx @ai-hero/sandcastle build-image`).
+- `gh` and SSH are authenticated in the devcontainer (origin is over SSH).
 
-### 1. Fetch ready issues
+## Run
+
+Drive everything through `/exec` (routes to the devcontainer, service
+`devcontainer`). Run from the **path-matched mount** `${LOCAL_WORKSPACE_FOLDER}`
+so the worktrees sandcastle creates resolve under docker-outside-of-docker
+(ADR-0011) — not from `/workspaces/<folder>`:
 
 ```
-mcp__github__list_issues(state="open", labels=["ready-for-agent"])
+cd "$LOCAL_WORKSPACE_FOLDER" \
+  && (cd .sandcastle && npm install) \
+  && AGENTIC_MODE=afk ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
 ```
 
-If the list is empty → print "All issues complete." and stop.
+`cd "$LOCAL_WORKSPACE_FOLDER"` keeps the orchestrator's `process.cwd()` (and
+thus sandcastle's `cwd`) on the host-resolvable path; invoking `.sandcastle`'s
+own `tsx` resolves `@ai-hero/sandcastle` from `.sandcastle/node_modules`.
 
-### 2. Claim the next issue
+## Behavior
 
-Take the lowest-numbered issue. Remove the `ready-for-agent` label to mark it in-progress.
+- Serially claims the lowest-numbered `ready-for-agent` issue (removing the
+  label to mark it in-progress), runs one sandbox, pushes `agent/issue-<N>`,
+  and opens a PR (`Closes #<N>`).
+- Stops cleanly when no issue is ready and nothing is in flight.
+- Each run is logged under `.sandcastle/logs/`.
 
-### 3. Spawn an implementation agent
+## Optional env
 
-Use the **Agent tool** with this self-contained prompt (fill in `<N>`, `<title>`, `<body>`):
+- `AGENTIC_REPO` — `owner/name` (default: the cwd repo's origin)
+- `AGENTIC_BASE_BRANCH` — PR base (default: `main`)
+- `AGENTIC_MODEL` — claudeCode model (default: `claude-sonnet-4-6`)
+- `SANDCASTLE_IMAGE` — inner image (default: `sandcastle:local`)
 
----
-```
-You are implementing GitHub issue #<N>: "<title>"
+## Not yet wired (later issues)
 
-## Issue
-<body verbatim>
-
-## Execution environment
-All shell commands MUST go through /exec — it routes to the Docker sandbox
-(service "devcontainer"). Never use the Bash tool directly.
-
-## Scope guardrails
-- Only modify files directly required by this issue
-- Do not create, edit, or close other issues
-- Do not push to main — commit to the current branch only
-- Do not add dependencies beyond what the issue specifies
-
-## Implementation approach
-Use /tdd: write failing tests first, implement to green, refactor.
-
-## Completion steps (in order)
-1. /tdd for every acceptance criterion in the issue
-2. /exec — run the full test suite; all tests must be green
-3. Commit with an imperative message referencing #<N>
-4. Comment on issue #<N> summarising what changed (one paragraph)
-5. Close issue #<N>
-```
----
-
-### 4. After the agent returns
-
-Verify the issue is closed. If not, investigate and retry.
-
-### 5. Unblock dependents
-
-Scan all open issues whose body contains `Blocked by #<N>`.
-For each, check if ALL its blockers are now closed.
-If yes → apply `ready-for-agent` label.
-
-### 6. Continue loop
-
-Go back to step 1.
+Auto-merge on green CI (#3), `/hitl` merge gate (#4), event-driven smee loop
+(#5), dependency-ordered unblocking (#2), concurrency > 1 (#6), local Ollama
+tier (#7), and orphan teardown (#8). This wrapper is the slice-1 walking
+skeleton: one issue → sandbox → PR, serial, poll-once.
