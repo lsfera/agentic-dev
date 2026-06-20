@@ -71,7 +71,9 @@ export function reduce(state: State, event: Event): Action[] {
       return onTick(state);
     case "PrMerged":
       return onPrMerged(state, event.pr);
-    // SandboxFinished / SandboxFailed land in later slices (#5).
+    case "SandboxFinished":
+      return onSandboxFinished(state, event);
+    // SandboxFailed lands in a later slice.
     default:
       return [];
   }
@@ -109,13 +111,26 @@ function onPrMerged(state: State, mergedPr: Pr): Action[] {
     .map((issue) => ({ type: "Relabel", issueId: issue.id, label: READY_LABEL }));
 }
 
+function onSandboxFinished(state: State, event: { issue: number; pr: Pr }): Action[] {
+  if (state.policy.mode === "afk") {
+    return [{ type: "EnableAutoMerge", pr: event.pr }];
+  }
+  return [{ type: "WaitForHuman", pr: event.pr }];
+}
+
 function onTick(state: State): Action[] {
   const ready = state.issues
     .filter((issue) => isReady(issue, state))
     .sort((a, b) => a.id - b.id);
 
-  // Stop only when the world is quiet: nothing to start and nothing running.
-  if (ready.length === 0 && state.inFlight.length === 0) {
+  // In afk mode, open PRs with auto-merge enabled keep the loop alive until CI
+  // passes and GitHub performs the merge.
+  const pendingAutoMerge =
+    state.policy.mode === "afk" && state.prs.some((pr) => !pr.merged);
+
+  // Stop only when the world is quiet: nothing to start, nothing running, and
+  // no PRs awaiting auto-merge.
+  if (ready.length === 0 && state.inFlight.length === 0 && !pendingAutoMerge) {
     return [{ type: "Stop" }];
   }
 
