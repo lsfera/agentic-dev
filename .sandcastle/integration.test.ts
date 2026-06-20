@@ -14,9 +14,16 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { SandboxRunner } from "./sandbox-runner.ts";
 
 const enabled = !!process.env.SANDCASTLE_INTEGRATION;
+
+// The repo root is the parent of this `.sandcastle/` dir. Anchor sandcastle's
+// cwd here regardless of where the test runner is invoked from (npm runs it
+// from `.sandcastle/`); the live orchestrator gets this for free by running
+// from the repo root.
+const repoRoot = resolve(import.meta.dirname, "..");
 
 test(
   "sandbox round-trip: agent commits to agent/issue-<N>",
@@ -24,7 +31,7 @@ test(
   async () => {
     const runner = new SandboxRunner({
       imageName: process.env.SANDCASTLE_IMAGE ?? "sandcastle:local",
-      cwd: process.cwd(),
+      cwd: repoRoot,
       maxIterations: 4,
     });
 

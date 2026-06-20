@@ -36,6 +36,12 @@ export interface RunnerOptions {
    *  path-matched mount (process.cwd() of the orchestrator). */
   readonly cwd?: string;
   readonly maxIterations?: number;
+  /** UID/GID baked into the inner image (Dockerfile ARG AGENT_UID/GID = 1000).
+   *  Must match the image, NOT the host user — sandcastle otherwise defaults to
+   *  the host UID, which mismatches on a host-direct run (e.g. macOS uid 501).
+   *  A no-op in the devcontainer, where the user is already 1000. */
+  readonly containerUid?: number;
+  readonly containerGid?: number;
 }
 
 export interface IssueInput {
@@ -53,7 +59,11 @@ export class SandboxRunner {
       agent: claudeCode(this.opts.model ?? "claude-sonnet-4-6", {
         permissionMode: "auto",
       }),
-      sandbox: docker({ imageName: this.opts.imageName ?? "sandcastle:local" }),
+      sandbox: docker({
+        imageName: this.opts.imageName ?? "sandcastle:local",
+        containerUid: this.opts.containerUid ?? 1000,
+        containerGid: this.opts.containerGid ?? 1000,
+      }),
       branchStrategy: { type: "branch", branch },
       cwd: this.opts.cwd,
       name: `issue-${issue.number}`,
