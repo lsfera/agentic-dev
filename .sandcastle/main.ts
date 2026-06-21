@@ -21,13 +21,51 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { reduce, READY_LABEL, type State, type Pr, type Policy } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { SandboxRunner, SANDBOX_LABEL } from "./sandbox-runner.ts";
+
+export { SANDBOX_LABEL };
 
 const sh = promisify(execFile);
 
+type ShellExec = (file: string, args: string[]) => Promise<{ stdout: string | Buffer }>;
+
+/**
+ * Remove all containers that carry the agentic sandbox label.
+ *
+ * Called on startup (sweeps orphans from a previous crashed run) and at the
+ * end of main() (confirms no containers linger after a clean exit). Each
+ * individual run() call already closes its sandbox in a finally block via
+ * sandcastle's internal lifecycle management; this sweep is a belt-and-
+ * suspenders backstop for the SIGKILL / OOM case where those hooks never fire.
+ *
+ * Accepts an optional exec shim for unit testing.
+ */
+export async function sweepOrphanedSandboxes(exec: ShellExec = sh as ShellExec): Promise<number> {
+  try {
+    const { stdout } = await exec("docker", [
+      "ps", "-a", "-q", "--no-trunc",
+      "--filter", `label=${SANDBOX_LABEL}`,
+    ]);
+    const ids = String(stdout)
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length === 0) return 0;
+    await exec("docker", ["rm", "-f", ...ids]);
+    console.log(`[afk] swept ${ids.length} orphaned sandbox container(s)`);
+    return ids.length;
+  } catch {
+    return 0;
+  }
+}
+
 async function main(): Promise<void> {
+  // Startup sweep: remove orphaned containers from any previous crashed run.
+  await sweepOrphanedSandboxes();
+
   const repo = process.env.AGENTIC_REPO;
   const base = process.env.AGENTIC_BASE_BRANCH ?? "main";
   const repoRoot = process.cwd();
@@ -84,6 +122,8 @@ async function main(): Promise<void> {
 
     if (actions.some((a) => a.type === "Stop")) {
       console.log("[afk] nothing ready, nothing in flight — done.");
+      // Shutdown sweep: confirm no containers linger after a clean exit.
+      await sweepOrphanedSandboxes();
       return;
     }
 
@@ -181,4 +221,7 @@ async function processIssue(
   return { issue: n, ciStatus: "pending", merged: false };
 }
 
-await main();
+// Run only when executed directly; not when imported (e.g., in tests).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await main();
+}

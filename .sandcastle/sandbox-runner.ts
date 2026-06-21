@@ -21,6 +21,12 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const COMPLETION_SIGNAL = "<promise>ISSUE_COMPLETE</promise>";
 
+/**
+ * Docker label applied to every inner sandbox image (via Dockerfile LABEL).
+ * Used for label-scoped container sweeps on startup and shutdown.
+ */
+export const SANDBOX_LABEL = "agentic.sandbox=1";
+
 export interface SandboxOutcome {
   readonly branch: string;
   readonly commits: { sha: string }[];
