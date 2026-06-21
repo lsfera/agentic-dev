@@ -33,9 +33,13 @@ async function main(): Promise<void> {
   const repoRoot = process.cwd();
 
   const issues = new IssueSource(repo);
+  const tier = (process.env.AGENTIC_TIER ?? "claude") as "claude" | "local";
   const runner = new SandboxRunner({
-    imageName: process.env.SANDCASTLE_IMAGE ?? "sandcastle:local",
+    imageName: process.env.SANDCASTLE_IMAGE,
     model: process.env.AGENTIC_MODEL,
+    tier,
+    localModel: process.env.AGENTIC_LOCAL_MODEL,
+    localImageName: process.env.SANDCASTLE_OPENCODE_IMAGE,
     cwd: repoRoot,
   });
 

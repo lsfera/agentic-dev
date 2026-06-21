@@ -53,11 +53,26 @@ its `gh` calls authenticate; it is not forwarded to the sandboxes.
 - `AGENTIC_REPO` — `owner/name` (default: the cwd repo's origin)
 - `AGENTIC_BASE_BRANCH` — PR base (default: `main`)
 - `AGENTIC_MODEL` — claudeCode model (default: `claude-sonnet-4-6`)
-- `SANDCASTLE_IMAGE` — inner image (default: `sandcastle:local`)
+- `SANDCASTLE_IMAGE` — inner image for the claude tier (default: `sandcastle:local`)
+- `AGENTIC_TIER` — agent tier: `claude` (default) or `local` (Ollama via opencode)
+- `AGENTIC_LOCAL_MODEL` — opencode model for the local tier (default: `ollama/qwen3-coder:30b`)
+- `SANDCASTLE_OPENCODE_IMAGE` — inner image for the local tier (default: `sandcastle-opencode:local`)
+
+### Local tier prereqs
+
+When `AGENTIC_TIER=local`, the local-tier image must exist and Ollama must be
+reachable from the devcontainer at `host.docker.internal:11434`:
+
+```
+docker build -t sandcastle-opencode:local -f .sandcastle/Dockerfile.opencode .sandcastle
+```
+
+The `opencode.json` at the repo root is copied into each worktree automatically
+via `copyToWorktree` and configures the Ollama provider.
 
 ## Not yet wired (later issues)
 
 Auto-merge on green CI (#3), `/hitl` merge gate (#4), event-driven smee loop
-(#5), dependency-ordered unblocking (#2), concurrency > 1 (#6), local Ollama
-tier (#7), and orphan teardown (#8). This wrapper is the slice-1 walking
-skeleton: one issue → sandbox → PR, serial, poll-once.
+(#5), dependency-ordered unblocking (#2), concurrency > 1 (#6), and orphan
+teardown (#8). This wrapper is the slice-1 walking skeleton: one issue →
+sandbox → PR, serial, poll-once.
