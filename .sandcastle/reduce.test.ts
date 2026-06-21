@@ -243,6 +243,79 @@ test("Tick with pending CI on open PR does not emit EnableAutoMerge", () => {
   assert.ok(!actions.some((a) => a.type === "EnableAutoMerge"), "Tick should not emit EnableAutoMerge");
 });
 
+// ─── Concurrency knob ────────────────────────────────────────────────────────
+
+test("concurrency=2 with 2 ready issues -> emits 2 StartSandbox (lowest IDs first)", () => {
+  const state = base({
+    issues: [
+      { id: 3, labels: [READY_LABEL], blockedBy: [] },
+      { id: 1, labels: [READY_LABEL], blockedBy: [] },
+      { id: 2, labels: [READY_LABEL], blockedBy: [] },
+    ],
+    policy: { concurrency: 2, mode: "afk" },
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 1 },
+    { type: "StartSandbox", issueId: 2 },
+  ]);
+});
+
+test("concurrency=N with N ready issues -> emits N StartSandbox", () => {
+  const n = 3;
+  const state = base({
+    issues: Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
+      labels: [READY_LABEL],
+      blockedBy: [],
+    })),
+    policy: { concurrency: n, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.equal(actions.filter((a) => a.type === "StartSandbox").length, n);
+});
+
+test("concurrency=2 with 1 in-flight -> only 1 more StartSandbox emitted", () => {
+  const state = base({
+    issues: [
+      { id: 1, labels: [READY_LABEL], blockedBy: [] },
+      { id: 2, labels: [READY_LABEL], blockedBy: [] },
+      { id: 3, labels: [READY_LABEL], blockedBy: [] },
+    ],
+    inFlight: [10],
+    policy: { concurrency: 2, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  const starts = actions.filter((a) => a.type === "StartSandbox");
+  assert.equal(starts.length, 1, "only 1 slot remains (2 - 1 in-flight)");
+  assert.deepEqual(starts[0], { type: "StartSandbox", issueId: 1 });
+});
+
+test("in-flight count fully saturates cap -> no StartSandbox emitted", () => {
+  const state = base({
+    issues: [
+      { id: 3, labels: [READY_LABEL], blockedBy: [] },
+      { id: 4, labels: [READY_LABEL], blockedBy: [] },
+    ],
+    inFlight: [1, 2],
+    policy: { concurrency: 2, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "StartSandbox"), "no slots — cap fully used");
+});
+
+test("default concurrency is 1: two ready issues -> exactly one StartSandbox", () => {
+  const state = base({
+    issues: [
+      { id: 1, labels: [READY_LABEL], blockedBy: [] },
+      { id: 2, labels: [READY_LABEL], blockedBy: [] },
+    ],
+  });
+  assert.equal(state.policy.concurrency, 1);
+  assert.deepEqual(reduce(state, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 1 },
+  ]);
+});
+
 // ─── Demo: two-issue chain A blocks B ────────────────────────────────────────
 
 test("demo: A blocks B — A starts first; after A merges, B enters ready-set", () => {
