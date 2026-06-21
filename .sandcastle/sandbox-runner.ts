@@ -16,7 +16,7 @@
  * devcontainer's existing gh + SSH auth (walking-skeleton choice; keeps tokens
  * out of inner sandboxes).
  */
-import { run, claudeCode } from "@ai-hero/sandcastle";
+import { run, claudeCode, opencode, type AgentProvider } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const COMPLETION_SIGNAL = "<promise>ISSUE_COMPLETE</promise>";
@@ -32,6 +32,13 @@ export interface SandboxOutcome {
 export interface RunnerOptions {
   readonly imageName?: string;
   readonly model?: string;
+  /** Agent tier: "claude" (default, uses claudeCode + CLAUDE_CODE_OAUTH_TOKEN)
+   *  or "local" (uses opencode against the host Ollama server). */
+  readonly tier?: "claude" | "local";
+  /** Model for the local Ollama tier (default: "ollama/qwen3-coder:30b"). */
+  readonly localModel?: string;
+  /** Inner image for the local tier (default: "sandcastle-opencode:local"). */
+  readonly localImageName?: string;
   /** Host repo root; anchors sandcastle worktrees/.env. Should be the
    *  path-matched mount (process.cwd() of the orchestrator). */
   readonly cwd?: string;
@@ -42,6 +49,29 @@ export interface RunnerOptions {
    *  A no-op in the devcontainer, where the user is already 1000. */
   readonly containerUid?: number;
   readonly containerGid?: number;
+}
+
+/** Resolved agent-tier inputs: agent provider, docker image, and any extra
+ *  worktree files to copy before the sandbox starts. */
+export interface AgentInput {
+  readonly agent: AgentProvider;
+  readonly imageName: string;
+  readonly copyToWorktree?: string[];
+}
+
+/** Pure function: resolve RunnerOptions to the per-tier agent config. */
+export function buildAgentInput(opts: RunnerOptions): AgentInput {
+  if (opts.tier === "local") {
+    return {
+      agent: opencode(opts.localModel ?? "ollama/qwen3-coder:30b"),
+      imageName: opts.localImageName ?? "sandcastle-opencode:local",
+      copyToWorktree: ["opencode.json"],
+    };
+  }
+  return {
+    agent: claudeCode(opts.model ?? "claude-sonnet-4-6", { permissionMode: "auto" }),
+    imageName: opts.imageName ?? "sandcastle:local",
+  };
 }
 
 export interface IssueInput {
@@ -55,12 +85,11 @@ export class SandboxRunner {
 
   async runIssue(issue: IssueInput): Promise<SandboxOutcome> {
     const branch = `agent/issue-${issue.number}`;
+    const agentInput = buildAgentInput(this.opts);
     const result = await run({
-      agent: claudeCode(this.opts.model ?? "claude-sonnet-4-6", {
-        permissionMode: "auto",
-      }),
+      agent: agentInput.agent,
       sandbox: docker({
-        imageName: this.opts.imageName ?? "sandcastle:local",
+        imageName: agentInput.imageName,
         containerUid: this.opts.containerUid ?? 1000,
         containerGid: this.opts.containerGid ?? 1000,
       }),
@@ -69,6 +98,7 @@ export class SandboxRunner {
       name: `issue-${issue.number}`,
       maxIterations: this.opts.maxIterations ?? 12,
       completionSignal: COMPLETION_SIGNAL,
+      copyToWorktree: agentInput.copyToWorktree,
       prompt: buildPrompt(issue),
     });
 

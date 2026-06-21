@@ -1,0 +1,9 @@
+{
+  "provider": {
+    "ollama": {
+      "module": "@ai-sdk/openai-compatible",
+      "baseURL": "http://host.docker.internal:11434/v1",
+      "apiKey": "ollama"
+    }
+  }
+}
