@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y \
   curl \
   && rm -rf /var/lib/apt/lists/*
 
+# Identifying label — lets the orchestrator find and sweep containers from this
+# image with `docker ps --filter label=agentic.sandbox=1` on startup/shutdown.
+LABEL "agentic.sandbox"="1"
+
 # Build-args for UID/GID alignment: sandcastle's image build defaults these to
 # the host user's UID/GID so image-built files and bind-mounted worktree files
 # share an owner without a runtime chown. The inner image must be UID 1000.

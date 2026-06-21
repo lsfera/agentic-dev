@@ -10,6 +10,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
+import { sweepOrphanedSandboxes } from "./main.ts";
+import { SANDBOX_LABEL } from "./sandbox-runner.ts";
 
 const base = (over: Partial<State> = {}): State => ({
   issues: [],
@@ -317,6 +319,56 @@ test("default concurrency is 1: two ready issues -> exactly one StartSandbox", (
 });
 
 // ─── Demo: two-issue chain A blocks B ────────────────────────────────────────
+
+// ─── Orphan sweep ────────────────────────────────────────────────────────────
+
+test("SANDBOX_LABEL has the agentic.sandbox key", () => {
+  assert.ok(SANDBOX_LABEL.startsWith("agentic.sandbox="), `expected 'agentic.sandbox=…', got '${SANDBOX_LABEL}'`);
+});
+
+test("sweepOrphanedSandboxes: no containers → returns 0 and skips docker rm", async () => {
+  const calls: Array<[string, string[]]> = [];
+  const exec = (file: string, args: string[]) => {
+    calls.push([file, args]);
+    return Promise.resolve({ stdout: "" });
+  };
+  const count = await sweepOrphanedSandboxes(exec);
+  assert.equal(count, 0);
+  assert.ok(!calls.some(([, a]) => a[0] === "rm"), "docker rm must not be called when no containers found");
+});
+
+test("sweepOrphanedSandboxes: found containers → calls docker rm -f and returns count", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const exec = (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return Promise.resolve({ stdout: args[0] === "ps" ? "abc123\ndef456\n" : "" });
+  };
+  const count = await sweepOrphanedSandboxes(exec);
+  assert.equal(count, 2);
+  const rm = calls.find((c) => c.args[0] === "rm");
+  assert.ok(rm, "docker rm should be called");
+  assert.ok(rm!.args.includes("-f"), "rm must be forced");
+  assert.ok(rm!.args.includes("abc123") && rm!.args.includes("def456"), "rm must include all container ids");
+});
+
+test("sweepOrphanedSandboxes: docker error → returns 0 without throwing", async () => {
+  const exec = () => Promise.reject(new Error("Docker unavailable"));
+  const count = await sweepOrphanedSandboxes(exec as Parameters<typeof sweepOrphanedSandboxes>[0]);
+  assert.equal(count, 0);
+});
+
+test("sweepOrphanedSandboxes: docker ps uses SANDBOX_LABEL as the filter", async () => {
+  let psArgs: string[] = [];
+  const exec = (file: string, args: string[]) => {
+    if (args[0] === "ps") psArgs = args;
+    return Promise.resolve({ stdout: "" });
+  };
+  await sweepOrphanedSandboxes(exec);
+  assert.ok(
+    psArgs.includes(`label=${SANDBOX_LABEL}`),
+    `docker ps must filter by 'label=${SANDBOX_LABEL}'`,
+  );
+});
 
 test("demo: A blocks B — A starts first; after A merges, B enters ready-set", () => {
   // Step 1: only A has ready-for-agent; B is blocked (no label yet)
