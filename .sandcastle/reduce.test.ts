@@ -501,6 +501,55 @@ test("withRetry: does not sleep after the final failed attempt", async () => {
   assert.equal(sleeps.length, 1, "only sleeps between attempts, not after the last failure");
 });
 
+// ─── Event-driven loop (issue #5) ────────────────────────────────────────────
+
+test("duplicate PrMerged for already-processed PR emits no StartSandbox", () => {
+  // Simulate: PR #1 merged, issue #2 relabeled and sandbox already started.
+  const mergedPr = { issue: 1, ciStatus: "success" as CiStatus, merged: true };
+  const state = base({
+    issues: [{ id: 2, labels: [READY_LABEL], blockedBy: [1] }],
+    prs: [mergedPr],
+    inFlight: [2], // sandbox already running for #2
+  });
+
+  // A duplicate PrMerged delivery must never emit StartSandbox directly.
+  const prMergedActions = reduce(state, { type: "PrMerged", pr: mergedPr });
+  assert.ok(
+    !prMergedActions.some((a) => a.type === "StartSandbox"),
+    "PrMerged never emits StartSandbox directly",
+  );
+
+  // A subsequent Tick must not restart #2 — it is already in-flight.
+  const tickActions = reduce(state, { type: "Tick" });
+  assert.ok(
+    !tickActions.some((a) => a.type === "StartSandbox"),
+    "in-flight issue not restarted after duplicate PrMerged",
+  );
+  assert.ok(
+    !tickActions.some((a) => a.type === "Stop"),
+    "in-flight work keeps loop alive",
+  );
+});
+
+test("nothing ready but in-flight sandbox -> no Stop (keep listening)", () => {
+  // No issues in the queue, but a sandbox is running — the loop must stay alive.
+  const state = base({
+    issues: [],
+    prs: [],
+    inFlight: [1],
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(
+    !actions.some((a) => a.type === "Stop"),
+    "in-flight sandbox prevents Stop",
+  );
+  assert.deepEqual(
+    actions.filter((a) => a.type === "StartSandbox"),
+    [],
+    "no new work to start",
+  );
+});
+
 // ─── demo: A blocks B — A starts first; after A merges, B enters ready-set ───
 
 test("demo: A blocks B — A starts first; after A merges, B enters ready-set", () => {
