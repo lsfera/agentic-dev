@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes } from "./main.ts";
+import { sweepOrphanedSandboxes, parseConcurrency } from "./main.ts";
 import { SANDBOX_LABEL } from "./sandbox-runner.ts";
 
 const base = (over: Partial<State> = {}): State => ({
@@ -393,6 +393,40 @@ test("sweepOrphanedSandboxes: docker ps uses SANDBOX_LABEL as the filter", async
     psArgs.includes(`label=${SANDBOX_LABEL}`),
     `docker ps must filter by 'label=${SANDBOX_LABEL}'`,
   );
+});
+
+// ─── Concurrency env-var ─────────────────────────────────────────────────────
+
+test("parseConcurrency: defaults to 1 when AGENTIC_CONCURRENCY is not set", () => {
+  const saved = process.env.AGENTIC_CONCURRENCY;
+  delete process.env.AGENTIC_CONCURRENCY;
+  try {
+    assert.equal(parseConcurrency(), 1);
+  } finally {
+    if (saved !== undefined) process.env.AGENTIC_CONCURRENCY = saved;
+  }
+});
+
+test("parseConcurrency: reads AGENTIC_CONCURRENCY=3", () => {
+  const saved = process.env.AGENTIC_CONCURRENCY;
+  process.env.AGENTIC_CONCURRENCY = "3";
+  try {
+    assert.equal(parseConcurrency(), 3);
+  } finally {
+    if (saved !== undefined) process.env.AGENTIC_CONCURRENCY = saved;
+    else delete process.env.AGENTIC_CONCURRENCY;
+  }
+});
+
+test("parseConcurrency: invalid value falls back to 1", () => {
+  const saved = process.env.AGENTIC_CONCURRENCY;
+  process.env.AGENTIC_CONCURRENCY = "bad";
+  try {
+    assert.equal(parseConcurrency(), 1);
+  } finally {
+    if (saved !== undefined) process.env.AGENTIC_CONCURRENCY = saved;
+    else delete process.env.AGENTIC_CONCURRENCY;
+  }
 });
 
 test("demo: A blocks B — A starts first; after A merges, B enters ready-set", () => {
