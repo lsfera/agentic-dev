@@ -14,10 +14,15 @@
  * the pure reducer, not here.
  *
  * Env:
- *   AGENTIC_REPO         optional "owner/name" (default: cwd repo origin)
- *   AGENTIC_BASE_BRANCH  PR base branch (default: main)
- *   AGENTIC_MODEL        claudeCode model (default: claude-sonnet-4-6)
- *   SANDCASTLE_IMAGE     inner image (default: sandcastle:local)
+ *   AGENTIC_REPO          optional "owner/name" (default: cwd repo origin)
+ *   AGENTIC_BASE_BRANCH   PR base branch (default: main)
+ *   AGENTIC_MODEL         claudeCode model (default: claude-sonnet-4-6)
+ *   SANDCASTLE_IMAGE      inner image (default: sandcastle:local)
+ *   AGENTIC_CONCURRENCY   max parallel sandboxes (default: 1, serial)
+ *
+ * Concurrency note: raising AGENTIC_CONCURRENCY multiplies live resources —
+ * N inner Docker sandboxes, N read-only SSH-key copies (ADR-0004), and
+ * N concurrent Claude subscription seats. The safe default stays serial (1).
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -29,6 +34,11 @@ import { SandboxRunner, SANDBOX_LABEL } from "./sandbox-runner.ts";
 export { SANDBOX_LABEL };
 
 const sh = promisify(execFile);
+
+/** Read the concurrency cap from AGENTIC_CONCURRENCY (default 1, serial). */
+export function parseConcurrency(): number {
+  return Math.max(1, Number(process.env.AGENTIC_CONCURRENCY ?? "1") || 1);
+}
 
 type ShellExec = (file: string, args: string[]) => Promise<{ stdout: string | Buffer }>;
 
@@ -86,7 +96,7 @@ async function main(): Promise<void> {
   // PrMerged to avoid re-emitting Relabel on every subsequent tick.
   const seenMerged = new Set<number>();
 
-  const policy: Policy = { concurrency: 1, mode: "afk" };
+  const policy: Policy = { concurrency: parseConcurrency(), mode: "afk" };
 
   for (;;) {
     const mergedPrs = await issues.listMergedPrs();
@@ -131,48 +141,63 @@ async function main(): Promise<void> {
       return;
     }
 
-    const start = actions.find((a) => a.type === "StartSandbox");
-    if (!start || start.type !== "StartSandbox") {
+    const starts = actions.filter(
+      (a): a is { type: "StartSandbox"; issueId: number } => a.type === "StartSandbox",
+    );
+
+    if (starts.length === 0) {
       // No sandbox to start this tick — either waiting for CI on open PRs or
       // all slots are occupied. Sleep briefly and poll again.
-      console.log("[afk] waiting for CI on pending PRs...");
+      console.log("[afk] waiting for CI on pending PRs or in-flight sandboxes...");
       await new Promise<void>((r) => setTimeout(r, 60_000));
       continue;
     }
 
-    const n = start.issueId;
-    inFlight.push(n);
-    let openedPr: Pr | null = null;
-    try {
-      openedPr = await processIssue(n, issues, runner, base, repoRoot);
-    } catch (err) {
-      console.error(`[afk] #${n} failed:`, err);
-      // Leave the issue claimed (label removed) for a human to inspect.
-    } finally {
-      inFlight.splice(inFlight.indexOf(n), 1);
-    }
+    // Launch every StartSandbox the reducer emitted this tick in parallel.
+    // Each fires independently; inFlight is updated synchronously so the next
+    // tick's reducer counts these as occupied slots and won't over-subscribe.
+    for (const start of starts) {
+      const n = start.issueId;
+      inFlight.push(n);
+      console.log(`[afk] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
 
-    if (openedPr) {
-      const finishState: State = {
-        issues: ready,
-        prs: [...allPrs, openedPr],
-        inFlight,
-        policy,
-      };
-      const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
-      for (const action of finishActions) {
-        if (action.type === "EnableAutoMerge") {
-          console.log(`[afk] #${n} → enabling auto-merge`);
-          try {
-            await issues.enableAutoMerge(action.pr.issue);
-          } catch (err) {
-            // A config gap (auto-merge disabled, no required check) must not
-            // crash the orchestrator — the PR stays open for a human to merge.
-            console.error(`[afk] #${n} could not enable auto-merge:`, err);
+      void (async () => {
+        let openedPr: Pr | null = null;
+        try {
+          openedPr = await processIssue(n, issues, runner, base, repoRoot);
+        } catch (err) {
+          console.error(`[afk] #${n} failed:`, err);
+          // Leave the issue claimed (label removed) for a human to inspect.
+        } finally {
+          inFlight.splice(inFlight.indexOf(n), 1);
+        }
+
+        if (openedPr) {
+          const finishState: State = {
+            issues: ready,
+            prs: [...allPrs, openedPr],
+            inFlight,
+            policy,
+          };
+          const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
+          for (const action of finishActions) {
+            if (action.type === "EnableAutoMerge") {
+              console.log(`[afk] #${n} → enabling auto-merge`);
+              try {
+                await issues.enableAutoMerge(action.pr.issue);
+              } catch (err) {
+                // A config gap (auto-merge disabled, no required check) must not
+                // crash the orchestrator — the PR stays open for a human to merge.
+                console.error(`[afk] #${n} could not enable auto-merge:`, err);
+              }
+            }
           }
         }
-      }
+      })();
     }
+
+    // Sleep before the next poll to avoid busy-waiting while sandboxes run.
+    await new Promise<void>((r) => setTimeout(r, 60_000));
   }
 }
 
