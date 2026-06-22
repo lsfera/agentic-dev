@@ -27,7 +27,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { reduce, READY_LABEL, type State, type Pr, type Policy } from "./reduce.ts";
+import { reduce, READY_LABEL, type State, type Pr, type Policy, type Mode } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner, SANDBOX_LABEL } from "./sandbox-runner.ts";
 
@@ -96,7 +96,8 @@ async function main(): Promise<void> {
   // PrMerged to avoid re-emitting Relabel on every subsequent tick.
   const seenMerged = new Set<number>();
 
-  const policy: Policy = { concurrency: parseConcurrency(), mode: "afk" };
+  const mode = (process.env.AGENTIC_MODE ?? "afk") as Mode;
+  const policy: Policy = { concurrency: parseConcurrency(), mode };
 
   for (;;) {
     const mergedPrs = await issues.listMergedPrs();
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
         const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
         for (const action of unblockActions) {
           if (action.type === "Relabel") {
-            console.log(`[afk] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
+            console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
             await issues.addLabel(action.issueId, action.label);
           }
         }
@@ -135,7 +136,7 @@ async function main(): Promise<void> {
     const actions = reduce(state, { type: "Tick" });
 
     if (actions.some((a) => a.type === "Stop")) {
-      console.log("[afk] nothing ready, nothing in flight — done.");
+      console.log(`[${mode}] nothing ready, nothing in flight — done.`);
       // Shutdown sweep: confirm no containers linger after a clean exit.
       await sweepOrphanedSandboxes();
       return;
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
     if (starts.length === 0) {
       // No sandbox to start this tick — either waiting for CI on open PRs or
       // all slots are occupied. Sleep briefly and poll again.
-      console.log("[afk] waiting for CI on pending PRs or in-flight sandboxes...");
+      console.log(`[${mode}] waiting for pending PRs or in-flight sandboxes...`);
       await new Promise<void>((r) => setTimeout(r, 60_000));
       continue;
     }
@@ -159,14 +160,14 @@ async function main(): Promise<void> {
     for (const start of starts) {
       const n = start.issueId;
       inFlight.push(n);
-      console.log(`[afk] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
+      console.log(`[${mode}] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
 
       void (async () => {
         let openedPr: Pr | null = null;
         try {
-          openedPr = await processIssue(n, issues, runner, base, repoRoot);
+          openedPr = await processIssue(n, issues, runner, base, repoRoot, mode);
         } catch (err) {
-          console.error(`[afk] #${n} failed:`, err);
+          console.error(`[${mode}] #${n} failed:`, err);
           // Leave the issue claimed (label removed) for a human to inspect.
         } finally {
           inFlight.splice(inFlight.indexOf(n), 1);
@@ -182,14 +183,17 @@ async function main(): Promise<void> {
           const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
           for (const action of finishActions) {
             if (action.type === "EnableAutoMerge") {
-              console.log(`[afk] #${n} → enabling auto-merge`);
+              console.log(`[${mode}] #${n} → enabling auto-merge`);
               try {
                 await issues.enableAutoMerge(action.pr.issue);
               } catch (err) {
                 // A config gap (auto-merge disabled, no required check) must not
                 // crash the orchestrator — the PR stays open for a human to merge.
-                console.error(`[afk] #${n} could not enable auto-merge:`, err);
+                console.error(`[${mode}] #${n} could not enable auto-merge:`, err);
               }
+            }
+            if (action.type === "WaitForHuman") {
+              console.log(`[${mode}] #${n} → PR open, waiting for human review`);
             }
           }
         }
@@ -207,16 +211,17 @@ async function processIssue(
   runner: SandboxRunner,
   base: string,
   repoRoot: string,
+  mode: Mode,
 ): Promise<Pr | null> {
   const issue = await issues.get(n);
 
   // Claim: drop the ready label so the next tick won't re-pick this issue.
   await issues.removeLabel(n, READY_LABEL);
-  console.log(`[afk] #${n} "${issue.title}" claimed → sandbox`);
+  console.log(`[${mode}] #${n} "${issue.title}" claimed → sandbox`);
 
   const outcome = await runner.runIssue(issue);
   console.log(
-    `[afk] #${n} sandbox done: branch=${outcome.branch} ` +
+    `[${mode}] #${n} sandbox done: branch=${outcome.branch} ` +
       `commits=${outcome.commits.length} completed=${outcome.completed}` +
       (outcome.logFilePath ? ` log=${outcome.logFilePath}` : ""),
   );
@@ -246,7 +251,7 @@ async function processIssue(
       `git-isolated sandbox.\n\nCommits: ${shas}`,
   });
   await issues.comment(n, `Implemented in an isolated sandbox; opened ${prUrl}.`);
-  console.log(`[afk] #${n} → ${prUrl}`);
+  console.log(`[${mode}] #${n} → ${prUrl}`);
   return { issue: n, ciStatus: "pending", merged: false };
 }
 
