@@ -1,45 +1,38 @@
 # /hitl
 
-Human-in-the-loop implementation. Same as `/afk` but pauses after each issue for your approval.
+Human-in-the-loop implementation. Same orchestrator as `/afk`, but the reducer
+emits `WaitForHuman` instead of `EnableAutoMerge` — PRs are left open for you
+to review and merge. The loop keeps polling until you act (merge or close).
 
-## Loop
+## Prereqs
 
-Repeat until no open `ready-for-agent` issues remain:
+Same as `/afk` — see that command.
 
-### 1. Fetch ready issues
-
-```
-mcp__github__list_issues(state="open", labels=["ready-for-agent"])
-```
-
-If the list is empty → print "All issues complete." and stop.
-
-### 2. Claim the next issue
-
-Take the lowest-numbered issue. Remove the `ready-for-agent` label.
-
-### 3. Spawn an implementation agent
-
-Same prompt as `/afk` — see that command for the full template.
-The agent uses `/tdd` and `/exec` (Docker sandbox) for all implementation.
-
-### 4. Show a review summary
-
-After the agent returns, display:
-- Issue title and number
-- Files changed (git diff --stat)
-- Test results summary
-
-### 5. Ask for approval
+## Run
 
 ```
-Approve and move to next issue? (yes / no / edit)
+cd "$LOCAL_WORKSPACE_FOLDER" \
+  && (cd .sandcastle && npm install) \
+  && set -a && . .sandcastle/orchestrator.env && set +a \
+  && AGENTIC_MODE=hitl ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
 ```
 
-- **yes** → close the issue, unblock dependents (add `ready-for-agent` where all blockers are now closed), continue loop
-- **no** → revert the changes, re-open planning for this issue, stop loop
-- **edit** → wait for your instructions, re-run the agent with updated guidance, then re-ask
+## Behavior
 
-### 6. Continue loop
+- Claims `ready-for-agent` issues and runs sandboxes exactly as in `/afk`.
+- After each sandbox, opens a PR and logs `→ PR open, waiting for human review`
+  instead of enabling auto-merge.
+- Keeps polling while PRs are open so it can detect your action:
+  - **Merge the PR** → `PrMerged` unblocks dependents; they enter the ready-set
+    on the next tick.
+  - **Close the PR without merging** → PR disappears from the open set;
+    dependents stay blocked; the orchestrator moves on to other ready work
+    or stops if nothing is left.
+- Stops cleanly when nothing is ready, nothing is in flight, and no PRs remain
+  open.
 
-Go back to step 1.
+## Optional env
+
+Same as `/afk`: `AGENTIC_REPO`, `AGENTIC_BASE_BRANCH`, `AGENTIC_MODEL`,
+`SANDCASTLE_IMAGE`, `AGENTIC_TIER`, `AGENTIC_LOCAL_MODEL`,
+`SANDCASTLE_OPENCODE_IMAGE`.

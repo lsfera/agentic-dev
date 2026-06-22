@@ -245,6 +245,31 @@ test("Tick with pending CI on open PR does not emit EnableAutoMerge", () => {
   assert.ok(!actions.some((a) => a.type === "EnableAutoMerge"), "Tick should not emit EnableAutoMerge");
 });
 
+test("hitl mode + Tick with open PR and nothing else ready → no Stop (waiting for human)", () => {
+  const state = base({
+    issues: [{ id: 1, labels: [], blockedBy: [] }],
+    prs: [{ issue: 1, ciStatus: "pending", merged: false }],
+    policy: { concurrency: 1, mode: "hitl" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "should not Stop while PR awaits human review");
+});
+
+test("hitl mode + closed-unmerged PR (PR gone from state) → Stop; dependents remain blocked", () => {
+  // Simulate state after issue 1's PR was closed without merging:
+  // - Issue 1 is claimed (ready label removed), PR no longer in allPrs
+  // - Issue 2 is blocked by 1 and has no ready-for-agent label (PrMerged never fired)
+  const state = base({
+    issues: [
+      { id: 1, labels: [], blockedBy: [] },
+      { id: 2, labels: [], blockedBy: [1] },
+    ],
+    prs: [],
+    policy: { concurrency: 1, mode: "hitl" },
+  });
+  assert.deepEqual(reduce(state, { type: "Tick" }), [{ type: "Stop" }]);
+});
+
 // ─── Concurrency knob ────────────────────────────────────────────────────────
 
 test("concurrency=2 with 2 ready issues -> emits 2 StartSandbox (lowest IDs first)", () => {

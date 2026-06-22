@@ -123,14 +123,13 @@ function onTick(state: State): Action[] {
     .filter((issue) => isReady(issue, state))
     .sort((a, b) => a.id - b.id);
 
-  // In afk mode, open PRs with auto-merge enabled keep the loop alive until CI
-  // passes and GitHub performs the merge.
-  const pendingAutoMerge =
-    state.policy.mode === "afk" && state.prs.some((pr) => !pr.merged);
+  // Open PRs keep the loop alive regardless of mode: in afk mode we wait for
+  // CI + auto-merge; in hitl mode we wait for the human to act (merge or close).
+  const pendingMerge = state.prs.some((pr) => !pr.merged);
 
   // Stop only when the world is quiet: nothing to start, nothing running, and
-  // no PRs awaiting auto-merge.
-  if (ready.length === 0 && state.inFlight.length === 0 && !pendingAutoMerge) {
+  // no PRs awaiting merge.
+  if (ready.length === 0 && state.inFlight.length === 0 && !pendingMerge) {
     return [{ type: "Stop" }];
   }
 
