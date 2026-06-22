@@ -40,6 +40,44 @@ export function parseConcurrency(): number {
   return Math.max(1, Number(process.env.AGENTIC_CONCURRENCY ?? "1") || 1);
 }
 
+/**
+ * Retry `fn` up to `maxAttempts` times with exponential backoff.
+ * Throws the last error when all attempts are exhausted.
+ * `sleep` is injectable for unit tests (no real network or timers needed).
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: {
+    maxAttempts?: number;
+    baseDelayMs?: number;
+    label?: string;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<T> {
+  const {
+    maxAttempts = 4,
+    baseDelayMs = 2_000,
+    label = "operation",
+    sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+  } = opts;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        const delay = baseDelayMs * 2 ** (attempt - 1);
+        console.warn(
+          `[retry] ${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms`,
+        );
+        await sleep(delay);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 type ShellExec = (file: string, args: string[]) => Promise<{ stdout: string | Buffer }>;
 
 /**
@@ -100,32 +138,48 @@ async function main(): Promise<void> {
   const policy: Policy = { concurrency: parseConcurrency(), mode };
 
   for (;;) {
-    const mergedPrs = await issues.listMergedPrs();
-    const openPrs = await issues.listOpenPrs();
-    const allPrs = [...mergedPrs, ...openPrs];
+    // Wrap all top-of-loop gh calls so a transient API blip causes a retry
+    // rather than an unhandled rejection that exits the process. If all retries
+    // fail we log the error and sleep before the next tick.
+    let mergedPrs: Awaited<ReturnType<typeof issues.listMergedPrs>> = [];
+    let allPrs: Awaited<ReturnType<typeof issues.listMergedPrs>> = [];
+    let ready: Awaited<ReturnType<typeof issues.listReady>> = [];
+    try {
+      mergedPrs = await withRetry(() => issues.listMergedPrs(), { label: "listMergedPrs" });
+      const openPrs = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs" });
+      allPrs = [...mergedPrs, ...openPrs];
 
-    // Detect newly merged PRs and unblock dependent issues (#2).
-    for (const pr of mergedPrs) {
-      if (!seenMerged.has(pr.issue)) {
-        seenMerged.add(pr.issue);
-        const allIssues = await issues.listAll();
-        const unblockState: State = {
-          issues: allIssues,
-          prs: allPrs,
-          inFlight,
-          policy,
-        };
-        const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
-        for (const action of unblockActions) {
-          if (action.type === "Relabel") {
-            console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
-            await issues.addLabel(action.issueId, action.label);
+      // Detect newly merged PRs and unblock dependent issues (#2).
+      for (const pr of mergedPrs) {
+        if (!seenMerged.has(pr.issue)) {
+          seenMerged.add(pr.issue);
+          const allIssues = await withRetry(() => issues.listAll(), { label: "listAll" });
+          const unblockState: State = {
+            issues: allIssues,
+            prs: allPrs,
+            inFlight,
+            policy,
+          };
+          const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
+          for (const action of unblockActions) {
+            if (action.type === "Relabel") {
+              console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
+              await withRetry(
+                () => issues.addLabel(action.issueId, action.label),
+                { label: `addLabel #${action.issueId}` },
+              );
+            }
           }
         }
       }
+
+      ready = await withRetry(() => issues.listReady(), { label: "listReady" });
+    } catch (err) {
+      console.error(`[${mode}] poll tick failed after retries — sleeping before next tick:`, err);
+      await new Promise<void>((r) => setTimeout(r, 60_000));
+      continue;
     }
 
-    const ready = await issues.listReady();
     const state: State = {
       issues: ready,
       prs: allPrs,
@@ -241,15 +295,26 @@ async function processIssue(
   // Orchestrator-side push (over the devcontainer's mounted SSH key) + PR.
   await sh("git", ["push", "-u", "origin", outcome.branch], { cwd: repoRoot });
   const shas = outcome.commits.map((c) => c.sha.slice(0, 7)).join(", ");
-  const prUrl = await issues.openPr({
-    head: outcome.branch,
-    base,
-    title: `#${n}: ${issue.title}`,
-    body:
-      `Closes #${n}\n\n` +
-      `Implemented autonomously by the AFK orchestrator in an isolated, ` +
-      `git-isolated sandbox.\n\nCommits: ${shas}`,
-  });
+  let prUrl: string;
+  try {
+    prUrl = await issues.openPr({
+      head: outcome.branch,
+      base,
+      title: `#${n}: ${issue.title}`,
+      body:
+        `Closes #${n}\n\n` +
+        `Implemented autonomously by the AFK orchestrator in an isolated, ` +
+        `git-isolated sandbox.\n\nCommits: ${shas}`,
+    });
+  } catch (err) {
+    // Branch is pushed but PR creation failed. Log the branch name so it can
+    // be recovered manually with: gh pr create --head <branch>
+    console.error(
+      `[${mode}] #${n} gh pr create failed — branch ${outcome.branch} is pushed but has no PR:`,
+      err,
+    );
+    throw err;
+  }
   await issues.comment(n, `Implemented in an isolated sandbox; opened ${prUrl}.`);
   console.log(`[${mode}] #${n} → ${prUrl}`);
   return { issue: n, ciStatus: "pending", merged: false };
