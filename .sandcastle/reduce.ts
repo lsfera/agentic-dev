@@ -22,7 +22,7 @@
 
 export const READY_LABEL = "ready-for-agent";
 
-export type CiStatus = "none" | "pending" | "success" | "failure";
+export type CiStatus = "none" | "pending" | "success" | "failure" | "conflicting";
 
 export interface Issue {
   readonly id: number;
@@ -123,9 +123,10 @@ function onTick(state: State): Action[] {
     .filter((issue) => isReady(issue, state))
     .sort((a, b) => a.id - b.id);
 
-  // Open PRs keep the loop alive regardless of mode: in afk mode we wait for
-  // CI + auto-merge; in hitl mode we wait for the human to act (merge or close).
-  const pendingMerge = state.prs.some((pr) => !pr.merged);
+  // Open PRs keep the loop alive: in afk mode we wait for CI + auto-merge; in
+  // hitl mode we wait for the human to act. Exception: a conflicting PR can
+  // never auto-merge — exclude it so the loop doesn't hang forever (#23).
+  const pendingMerge = state.prs.some((pr) => !pr.merged && pr.ciStatus !== "conflicting");
 
   // Stop only when the world is quiet: nothing to start, nothing running, and
   // no PRs awaiting merge.

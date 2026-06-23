@@ -80,6 +80,19 @@ export async function withRetry<T>(
 
 type ShellExec = (file: string, args: string[]) => Promise<{ stdout: string | Buffer }>;
 
+type GitRun = (args: string[]) => Promise<unknown>;
+
+/**
+ * Delete the stale local and remote `agent/issue-N` branch before starting a
+ * new sandbox. Best-effort — both deletions silently succeed if the branch is
+ * absent. Accepts an injectable gitRun for unit testing (#23).
+ */
+export async function resetAgentBranch(issueId: number, gitRun: GitRun): Promise<void> {
+  const branch = `agent/issue-${issueId}`;
+  try { await gitRun(["branch", "-D", branch]); } catch {}
+  try { await gitRun(["push", "origin", "--delete", branch]); } catch {}
+}
+
 /**
  * Remove all containers that carry the agentic sandbox label.
  *
@@ -272,6 +285,11 @@ async function processIssue(
   // Claim: drop the ready label so the next tick won't re-pick this issue.
   await issues.removeLabel(n, READY_LABEL);
   console.log(`[${mode}] #${n} "${issue.title}" claimed → sandbox`);
+
+  // Delete any stale agent/issue-N branch (local + remote) left by a prior
+  // failed/partial run, so sandcastle branches from the current base instead
+  // of reusing a stale ref that would conflict at merge time (#23).
+  await resetAgentBranch(n, (args) => sh("git", args, { cwd: repoRoot }));
 
   const outcome = await runner.runIssue(issue);
   console.log(

@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, parseConcurrency, withRetry } from "./main.ts";
+import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch } from "./main.ts";
 import { SANDBOX_LABEL } from "./sandbox-runner.ts";
 
 const base = (over: Partial<State> = {}): State => ({
@@ -499,6 +499,48 @@ test("withRetry: does not sleep after the final failed attempt", async () => {
       }),
   );
   assert.equal(sleeps.length, 1, "only sleeps between attempts, not after the last failure");
+});
+
+// ─── Conflicting PR (issue #23) ──────────────────────────────────────────────
+
+test("conflicting PR does not keep loop alive — Stop emitted when nothing else pending", () => {
+  const state = base({
+    issues: [{ id: 1, labels: [], blockedBy: [] }],
+    prs: [{ issue: 1, ciStatus: "conflicting" as CiStatus, merged: false }],
+    policy: { concurrency: 1, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(actions.some((a) => a.type === "Stop"), "conflicting PR must not block Stop");
+});
+
+test("pending + conflicting PRs: pending keeps loop alive", () => {
+  const state = base({
+    issues: [],
+    prs: [
+      { issue: 1, ciStatus: "conflicting" as CiStatus, merged: false },
+      { issue: 2, ciStatus: "pending" as CiStatus, merged: false },
+    ],
+    policy: { concurrency: 1, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "pending PR keeps loop alive even with a conflicting sibling");
+});
+
+// ─── resetAgentBranch (issue #23) ────────────────────────────────────────────
+
+test("resetAgentBranch: deletes local then remote branch for the issue", async () => {
+  const calls: string[][] = [];
+  const gitRun = (args: string[]) => { calls.push(args); return Promise.resolve(); };
+  await resetAgentBranch(23, gitRun);
+  const localDelete = calls.find((a) => a[0] === "branch" && a.includes("-D") && a.includes("agent/issue-23"));
+  const remoteDelete = calls.find((a) => a[0] === "push" && a.includes("--delete") && a.includes("agent/issue-23"));
+  assert.ok(localDelete, "should delete local branch agent/issue-23");
+  assert.ok(remoteDelete, "should delete remote branch agent/issue-23");
+});
+
+test("resetAgentBranch: swallows errors when branch does not exist", async () => {
+  const gitRun = () => Promise.reject(new Error("branch not found"));
+  await assert.doesNotReject(() => resetAgentBranch(23, gitRun));
 });
 
 // ─── demo: A blocks B — A starts first; after A merges, B enters ready-set ───
