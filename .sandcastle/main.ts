@@ -4,14 +4,10 @@
  * path-matched host mount (`${LOCAL_WORKSPACE_FOLDER}`), so sandcastle's
  * git-isolated worktrees resolve under docker-outside-of-docker (ADR-0011).
  *
- * Slice 1 (walking skeleton) is a serial poll loop:
- *   tick -> reduce(state, Tick) -> StartSandbox(id) | Stop
- *   on StartSandbox: claim the issue, run one sandbox, push its branch, open a PR
- *   stop when nothing is ready and nothing is in flight
- *
- * Event-driven operation (smee), auto-merge, HITL, dependency unblocking, and
- * concurrency > 1 arrive in later slices; the decision logic for them lives in
- * the pure reducer, not here.
+ * Event-driven operation (ADR-0008): a smee.io SSE channel relays GitHub
+ * pull_request webhooks into the orchestrator as PrMerged events. The poll
+ * loop is kept as a reconciliation backstop (5 min interval when smee is
+ * active) so a missed delivery cannot stall the run.
  *
  * Env:
  *   AGENTIC_REPO          optional "owner/name" (default: cwd repo origin)
@@ -19,11 +15,16 @@
  *   AGENTIC_MODEL         claudeCode model (default: claude-sonnet-4-6)
  *   SANDCASTLE_IMAGE      inner image (default: sandcastle:local)
  *   AGENTIC_CONCURRENCY   max parallel sandboxes (default: 1, serial)
+ *   SMEE_URL              smee.io channel URL (enables event-driven mode)
+ *   WEBHOOK_SECRET        shared HMAC secret for X-Hub-Signature-256 validation
  *
  * Concurrency note: raising AGENTIC_CONCURRENCY multiplies live resources —
  * N inner Docker sandboxes, N read-only SSH-key copies (ADR-0004), and
  * N concurrent Claude subscription seats. The safe default stays serial (1).
  */
+import { createHmac } from "node:crypto";
+import * as https from "node:https";
+import * as http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -123,6 +124,137 @@ export async function sweepOrphanedSandboxes(exec: ShellExec = sh as ShellExec):
   }
 }
 
+/**
+ * Constant-time HMAC-SHA256 validation for GitHub webhook signatures.
+ * `signature` is the raw X-Hub-Signature-256 header value (`sha256=<hex>`).
+ */
+export function validateSignature(
+  secret: string,
+  rawBody: string,
+  signature: string,
+): boolean {
+  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  if (signature.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) {
+    diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+type SmeeHandler = (
+  body: unknown,
+  headers: Record<string, string>,
+  deliveryId: string,
+) => void | Promise<void>;
+
+/**
+ * Subscribe to a smee.io (or compatible) SSE channel and invoke the handler
+ * on each webhook delivery. Reconnects automatically on disconnect.
+ *
+ * The caller is responsible for HMAC de-dupe; this function only parses the
+ * SSE stream and validates the signature when `secret` is provided.
+ */
+export function startSmeeListener(
+  smeeUrl: string,
+  secret: string | undefined,
+  handler: SmeeHandler,
+): void {
+  const connect = () => {
+    const lib = smeeUrl.startsWith("https://") ? https : (http as unknown as typeof https);
+    const req = lib.get(
+      smeeUrl,
+      {
+        headers: {
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      },
+      (res) => {
+        console.log(`[smee] connected (HTTP ${res.statusCode})`);
+        let buf = "";
+        let dataLines: string[] = [];
+        let eventType = "message";
+
+        res.on("data", (chunk: Buffer) => {
+          buf += chunk.toString("utf8");
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.length > 5 && line[5] === " " ? line.slice(6) : line.slice(5));
+            } else if (line.trim() === "") {
+              if (dataLines.length > 0 && eventType === "message") {
+                const rawData = dataLines.join("\n");
+                try {
+                  const parsed = JSON.parse(rawData) as Record<string, unknown>;
+                  const body = parsed["body"] ?? parsed;
+                  const rawHdrs = (parsed["headers"] ?? {}) as Record<string, unknown>;
+
+                  const headers: Record<string, string> = {};
+                  for (const [k, v] of Object.entries(rawHdrs)) {
+                    headers[k.toLowerCase()] = Array.isArray(v)
+                      ? String((v as unknown[])[0])
+                      : String(v);
+                  }
+
+                  const deliveryId = headers["x-github-delivery"] ?? "";
+
+                  if (secret) {
+                    const sig = headers["x-hub-signature-256"];
+                    if (!sig) {
+                      console.warn("[smee] missing X-Hub-Signature-256 — rejected");
+                      dataLines = [];
+                      eventType = "message";
+                      continue;
+                    }
+                    if (!validateSignature(secret, JSON.stringify(body), sig)) {
+                      console.warn("[smee] invalid HMAC signature — rejected");
+                      dataLines = [];
+                      eventType = "message";
+                      continue;
+                    }
+                  }
+
+                  void handler(body, headers, deliveryId);
+                } catch (e) {
+                  console.error("[smee] failed to parse event:", e);
+                }
+              }
+              dataLines = [];
+              eventType = "message";
+            }
+          }
+        });
+
+        res.on("end", () => {
+          console.log("[smee] connection closed — reconnecting in 5s");
+          setTimeout(connect, 5_000);
+        });
+
+        res.on("error", (err: Error) => {
+          console.error(`[smee] stream error: ${err.message}`);
+          setTimeout(connect, 5_000);
+        });
+      },
+    );
+
+    req.on("error", (err: Error) => {
+      console.error(`[smee] connection error: ${err.message}`);
+      setTimeout(connect, 5_000);
+    });
+
+    req.setTimeout(0);
+  };
+
+  console.log(`[smee] connecting to ${smeeUrl}`);
+  connect();
+}
+
 async function main(): Promise<void> {
   // Startup sweep: remove orphaned containers from any previous crashed run.
   await sweepOrphanedSandboxes();
@@ -143,12 +275,84 @@ async function main(): Promise<void> {
   });
 
   const inFlight: number[] = [];
-  // Tracks the set of issue ids whose PRs have already been processed via
-  // PrMerged to avoid re-emitting Relabel on every subsequent tick.
-  const seenMerged = new Set<number>();
+  // Issue ids whose PrMerged event has been dispatched to the reducer.
+  // Synchronous check + add before the first await ensures concurrent smee
+  // and reconciliation paths never double-dispatch the same merge.
+  const seenMerges = new Set<number>();
+  // GitHub X-GitHub-Delivery ids seen via smee — coarse delivery-level de-dupe.
+  const seenDeliveries = new Set<string>();
 
   const mode = (process.env.AGENTIC_MODE ?? "afk") as Mode;
   const policy: Policy = { concurrency: parseConcurrency(), mode };
+
+  // Dispatch a PrMerged event and execute the resulting Relabel actions.
+  // Shared between the smee listener and the reconciliation poll; the
+  // synchronous seenMerges check prevents double-dispatch.
+  async function handlePrMerged(pr: Pr, source: string): Promise<void> {
+    if (seenMerges.has(pr.issue)) return;
+    seenMerges.add(pr.issue); // must stay before the first await
+
+    console.log(`[${mode}] PR for #${pr.issue} merged (${source}) — checking dependents`);
+    const allIssues = await withRetry(() => issues.listAll(), { label: "listAll" });
+    const mergedPrsNow = await withRetry(() => issues.listMergedPrs(), { label: "listMergedPrs" });
+    const openPrsNow = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs" });
+    const allPrsNow = [...mergedPrsNow, ...openPrsNow];
+
+    const unblockState: State = { issues: allIssues, prs: allPrsNow, inFlight, policy };
+    const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
+    for (const action of unblockActions) {
+      if (action.type === "Relabel") {
+        console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
+        await withRetry(
+          () => issues.addLabel(action.issueId, action.label),
+          { label: `addLabel #${action.issueId}` },
+        );
+      }
+    }
+  }
+
+  // Start the smee webhook listener if SMEE_URL is configured (ADR-0008).
+  // The reconciliation poll below acts as the backstop for missed deliveries.
+  const smeeUrl = process.env.SMEE_URL;
+  const webhookSecret = process.env.WEBHOOK_SECRET;
+
+  if (smeeUrl) {
+    startSmeeListener(smeeUrl, webhookSecret, async (body, headers, deliveryId) => {
+      if (deliveryId && seenDeliveries.has(deliveryId)) return;
+      if (deliveryId) seenDeliveries.add(deliveryId);
+
+      if (headers["x-github-event"] !== "pull_request") return;
+
+      type PrPayload = {
+        action?: string;
+        pull_request?: {
+          merged?: boolean;
+          head?: { ref?: string };
+          merge_commit_sha?: string;
+        };
+      };
+      const payload = body as PrPayload;
+      if (payload.action !== "closed" || !payload.pull_request?.merged) return;
+
+      const branch = payload.pull_request.head?.ref ?? "";
+      const issueMatch = branch.match(/^agent\/issue-(\d+)$/);
+      if (!issueMatch) return;
+
+      const issueId = Number(issueMatch[1]);
+      const mergeSha = payload.pull_request.merge_commit_sha ?? "";
+      console.log(`[smee] PR merge: issue #${issueId} branch=${branch} sha=${mergeSha.slice(0, 7)}`);
+
+      try {
+        await handlePrMerged({ issue: issueId, ciStatus: "success", merged: true }, `smee:${deliveryId}`);
+      } catch (err) {
+        console.error(`[smee] handlePrMerged #${issueId} failed:`, err);
+      }
+    });
+  }
+
+  // With smee handling real-time merges, the poll loop is a reconciliation
+  // backstop only; 5 min is sufficient. Without smee, keep the original 60s.
+  const RECONCILE_INTERVAL = smeeUrl ? 5 * 60_000 : 60_000;
 
   for (;;) {
     // Wrap all top-of-loop gh calls so a transient API blip causes a retry
@@ -162,34 +366,15 @@ async function main(): Promise<void> {
       const openPrs = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs" });
       allPrs = [...mergedPrs, ...openPrs];
 
-      // Detect newly merged PRs and unblock dependent issues (#2).
+      // Reconciliation backstop: process any merges the smee listener may have missed.
       for (const pr of mergedPrs) {
-        if (!seenMerged.has(pr.issue)) {
-          seenMerged.add(pr.issue);
-          const allIssues = await withRetry(() => issues.listAll(), { label: "listAll" });
-          const unblockState: State = {
-            issues: allIssues,
-            prs: allPrs,
-            inFlight,
-            policy,
-          };
-          const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
-          for (const action of unblockActions) {
-            if (action.type === "Relabel") {
-              console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
-              await withRetry(
-                () => issues.addLabel(action.issueId, action.label),
-                { label: `addLabel #${action.issueId}` },
-              );
-            }
-          }
-        }
+        await handlePrMerged(pr, "reconcile");
       }
 
       ready = await withRetry(() => issues.listReady(), { label: "listReady" });
     } catch (err) {
       console.error(`[${mode}] poll tick failed after retries — sleeping before next tick:`, err);
-      await new Promise<void>((r) => setTimeout(r, 60_000));
+      await new Promise<void>((r) => setTimeout(r, RECONCILE_INTERVAL));
       continue;
     }
 
@@ -215,9 +400,9 @@ async function main(): Promise<void> {
 
     if (starts.length === 0) {
       // No sandbox to start this tick — either waiting for CI on open PRs or
-      // all slots are occupied. Sleep briefly and poll again.
+      // all slots are occupied. Sleep and poll again.
       console.log(`[${mode}] waiting for pending PRs or in-flight sandboxes...`);
-      await new Promise<void>((r) => setTimeout(r, 60_000));
+      await new Promise<void>((r) => setTimeout(r, RECONCILE_INTERVAL));
       continue;
     }
 
@@ -267,8 +452,8 @@ async function main(): Promise<void> {
       })();
     }
 
-    // Sleep before the next poll to avoid busy-waiting while sandboxes run.
-    await new Promise<void>((r) => setTimeout(r, 60_000));
+    // Sleep before the next reconciliation poll.
+    await new Promise<void>((r) => setTimeout(r, RECONCILE_INTERVAL));
   }
 }
 
