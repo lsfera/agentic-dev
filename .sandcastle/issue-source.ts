@@ -93,15 +93,23 @@ export class IssueSource {
     const { stdout } = await this.gh([
       "pr", "list",
       "--state", "open",
-      "--json", "number,headRefName",
+      "--json", "number,headRefName,mergeable",
     ]);
-    const raw = JSON.parse(stdout) as { number: number; headRefName: string }[];
+    const raw = JSON.parse(stdout) as {
+      number: number;
+      headRefName: string;
+      mergeable: string;
+    }[];
     return raw
       .map((pr) => {
         const m = pr.headRefName.match(/issue-(\d+)$/);
-        return m
-          ? { issue: parseInt(m[1], 10), ciStatus: "pending" as import("./reduce.ts").CiStatus, merged: false }
-          : null;
+        if (!m) return null;
+        // A CONFLICTING PR can never auto-merge; mark it so the reducer does
+        // not keep the loop alive forever waiting on it (#23).
+        const ciStatus = (
+          pr.mergeable === "CONFLICTING" ? "conflicting" : "pending"
+        ) as import("./reduce.ts").CiStatus;
+        return { issue: parseInt(m[1], 10), ciStatus, merged: false };
       })
       .filter((pr): pr is import("./reduce.ts").Pr => pr !== null);
   }
