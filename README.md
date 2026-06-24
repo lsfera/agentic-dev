@@ -156,24 +156,23 @@ This image ships the `opencode` CLI (pinned `opencode-ai@1.17.9`) instead of Cla
 
 **Run the orchestrator on the local tier**
 
-Set `AGENTIC_TIER=local` (optionally pick the model/image) and launch as usual:
+`.sandcastle/run.sh` steers the tier and model from arguments — it handles the `cd` to the path-matched mount, `npm install`, and `orchestrator.env` sourcing for you:
 
 ```bash
-cd "$LOCAL_WORKSPACE_FOLDER"
-(cd .sandcastle && npm install)
-set -a && . .sandcastle/orchestrator.env && set +a
-AGENTIC_TIER=local \
-AGENTIC_LOCAL_MODEL=ollama/qwen3-coder:30b \
-  ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+.sandcastle/run.sh afk local                    # default local model
+.sandcastle/run.sh afk local qwen2.5-coder:32b  # pick a model
+.sandcastle/run.sh hitl local                   # review before merge
 ```
+
+The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk local qwen2.5-coder:32b`). A bare model name is routed to the active tier and gets the `ollama/` prefix added if missing. Under the hood the arguments resolve to these env vars (arguments override `orchestrator.env`); `run.sh afk … --dry-run` prints the resolved values without launching:
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `AGENTIC_TIER` | `claude` | Set to `local` to use opencode + host Ollama instead of Claude Code. |
+| `AGENTIC_TIER` | `claude` | Set to `local` (arg: `local`) to use opencode + host Ollama instead of Claude Code. |
 | `AGENTIC_LOCAL_MODEL` | `ollama/qwen3-coder:30b` | opencode model ref (`ollama/<model>`); the model must exist in `ollama list`. |
 | `SANDCASTLE_OPENCODE_IMAGE` | `sandcastle-opencode:local` | Inner image for the local tier. |
 
-To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it via `AGENTIC_LOCAL_MODEL`. Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
+To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
 
 ## Permissions
 
