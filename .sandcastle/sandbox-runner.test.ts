@@ -36,6 +36,22 @@ test("local tier delivers opencode.json via copyToWorktree", () => {
   assert.ok(input.copyToWorktree!.includes("opencode.json"), "opencode.json must be in copyToWorktree");
 });
 
+test("local tier installs opencode config into the global config dir", () => {
+  // opencode resolves its Ollama provider from ~/.config/opencode, not the
+  // worktree cwd; without this hook the provider never resolves and every
+  // iteration is an empty turn. Lock in that the config is relocated to HOME.
+  const input = buildAgentInput({ tier: "local" });
+  assert.ok(Array.isArray(input.onSandboxReady), "onSandboxReady should be an array");
+  const cmds = input.onSandboxReady!.map((h) => h.command).join("\n");
+  assert.match(cmds, /\.config\/opencode/, "must target opencode's global config dir");
+  assert.match(cmds, /opencode\.json/, "must install the opencode.json config");
+});
+
+test("claude tier has no onSandboxReady hook", () => {
+  const input = buildAgentInput({ tier: "claude" });
+  assert.equal(input.onSandboxReady, undefined);
+});
+
 test("claude tier respects custom imageName", () => {
   const input = buildAgentInput({ imageName: "my-sandcastle:v2" });
   assert.equal(input.imageName, "my-sandcastle:v2");

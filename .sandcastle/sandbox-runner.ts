@@ -57,12 +57,21 @@ export interface RunnerOptions {
   readonly containerGid?: number;
 }
 
-/** Resolved agent-tier inputs: agent provider, docker image, and any extra
- *  worktree files to copy before the sandbox starts. */
+/** A command to run inside the sandbox once it is ready (sandcastle's
+ *  `hooks.sandbox.onSandboxReady` shape). */
+interface SandboxReadyHook {
+  readonly command: string;
+  readonly sudo?: boolean;
+}
+
+/** Resolved agent-tier inputs: agent provider, docker image, any extra
+ *  worktree files to copy, and any in-sandbox setup commands. */
 export interface AgentInput {
   readonly agent: AgentProvider;
   readonly imageName: string;
   readonly copyToWorktree?: string[];
+  /** Commands run inside the sandbox after it boots, before the agent runs. */
+  readonly onSandboxReady?: SandboxReadyHook[];
 }
 
 /** Pure function: resolve RunnerOptions to the per-tier agent config. */
@@ -72,6 +81,19 @@ export function buildAgentInput(opts: RunnerOptions): AgentInput {
       agent: opencode(opts.localModel ?? "ollama/qwen3-coder:30b"),
       imageName: opts.localImageName ?? "sandcastle-opencode:local",
       copyToWorktree: ["opencode.json"],
+      // opencode resolves its Ollama provider from its *global* config
+      // (~/.config/opencode/opencode.json), NOT from a config in the worktree
+      // cwd under sandcastle's launch — without this the provider never resolves,
+      // opencode bails before any inference (Ollama shows no model loaded), and
+      // every iteration is an empty "started → stopped" turn. Relocate the
+      // copied worktree config into opencode's global path so the model loads.
+      onSandboxReady: [
+        {
+          command:
+            "mkdir -p \"$HOME/.config/opencode\" && " +
+            "cp opencode.json \"$HOME/.config/opencode/opencode.json\"",
+        },
+      ],
     };
   }
   return {
@@ -105,7 +127,10 @@ export class SandboxRunner {
       maxIterations: this.opts.maxIterations ?? 12,
       completionSignal: COMPLETION_SIGNAL,
       copyToWorktree: agentInput.copyToWorktree,
-      prompt: buildPrompt(issue),
+      hooks: agentInput.onSandboxReady
+        ? { sandbox: { onSandboxReady: agentInput.onSandboxReady } }
+        : undefined,
+      prompt: buildPrompt(issue, this.opts.tier),
     });
 
     return {
@@ -117,7 +142,11 @@ export class SandboxRunner {
   }
 }
 
-function buildPrompt(issue: IssueInput): string {
+/** Per-tier prompt. Local models (opencode) get a short, action-first prompt:
+ *  the verbose claude prompt produces empty turns on smaller models — they need
+ *  a direct "edit the file now, then these exact commands" shape. */
+function buildPrompt(issue: IssueInput, tier?: "claude" | "local"): string {
+  if (tier === "local") return buildLocalPrompt(issue);
   return [
     `You are implementing GitHub issue #${issue.number}: "${issue.title}"`,
     "",
@@ -142,5 +171,28 @@ function buildPrompt(issue: IssueInput): string {
     "4. When the issue is fully implemented and committed, output exactly this",
     "   line, by itself, and then stop — produce no further output or commits:",
     `   ${COMPLETION_SIGNAL}`,
+  ].join("\n");
+}
+
+/** Short, directive prompt for local opencode models. Action-first, concrete
+ *  commands, minimal prose — verbose instructions produce empty turns. */
+function buildLocalPrompt(issue: IssueInput): string {
+  return [
+    `Implement this change in the repository, then commit. Use your tools now — read files, edit files, run bash. Do not just describe a plan.`,
+    "",
+    `TASK (issue #${issue.number}): ${issue.title}`,
+    issue.body || "(no body)",
+    "",
+    "The code lives in the `.sandcastle/` directory (TypeScript). Steps:",
+    "1. Read the relevant `.sandcastle/*.ts` file(s) with your read tool.",
+    "2. Make the change with your edit tool.",
+    "3. Run the tests: `cd .sandcastle && npm test` — fix until they pass.",
+    `4. Commit: \`cd .sandcastle && cd .. && git add -A && git commit -m "<message> (#${issue.number})"\``,
+    "5. Do NOT push or open a PR.",
+    "",
+    `When committed, output this exact line alone and stop:`,
+    COMPLETION_SIGNAL,
+    "",
+    "Begin now by reading the most relevant file.",
   ].join("\n");
 }
