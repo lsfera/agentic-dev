@@ -137,6 +137,44 @@ For `/exec` to land in *this* repo's container, the docker MCP server must run `
 
 Config, MCP registrations, and memory persist on the host at `~/.devcontainer-claude/`, surviving container rebuilds. `.env` reflects the **last** folder spun up (`init.sh` upserts the workspace paths on each `up.sh`).
 
+## Local model tier (Ollama)
+
+By default each implementation sandbox runs Claude (`claudeCode`). You can instead point the implementer at a **local Ollama model** via [opencode](https://opencode.ai) — no API cost, fully offline. Useful for cheap parallel work; quality depends on the local model, so it is not yet a drop-in for Claude on hard slices.
+
+**Prerequisites**
+
+- Ollama running on the host, bound to `0.0.0.0:11434` so containers can reach it at `http://host.docker.internal:11434`.
+- A coding model pulled, e.g. `ollama pull qwen3-coder:30b`. Keep weights ~15–22 GB so RAM stays free for Docker + the sandbox stack.
+
+**One-time: build the opencode inner image**
+
+```bash
+docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
+```
+
+This image ships the `opencode` CLI (pinned `opencode-ai@1.17.9`) instead of Claude Code. The provider config in `.sandcastle/opencode.json` points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
+
+**Run the orchestrator on the local tier**
+
+Set `AGENTIC_TIER=local` (optionally pick the model/image) and launch as usual:
+
+```bash
+cd "$LOCAL_WORKSPACE_FOLDER"
+(cd .sandcastle && npm install)
+set -a && . .sandcastle/orchestrator.env && set +a
+AGENTIC_TIER=local \
+AGENTIC_LOCAL_MODEL=ollama/qwen3-coder:30b \
+  ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+```
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `AGENTIC_TIER` | `claude` | Set to `local` to use opencode + host Ollama instead of Claude Code. |
+| `AGENTIC_LOCAL_MODEL` | `ollama/qwen3-coder:30b` | opencode model ref (`ollama/<model>`); the model must exist in `ollama list`. |
+| `SANDCASTLE_OPENCODE_IMAGE` | `sandcastle-opencode:local` | Inner image for the local tier. |
+
+To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it via `AGENTIC_LOCAL_MODEL`. Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
+
 ## Permissions
 
 Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.json` so `/exec` never prompts:
