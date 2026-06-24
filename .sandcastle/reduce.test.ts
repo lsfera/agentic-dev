@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch } from "./main.ts";
+import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase } from "./main.ts";
 import { SANDBOX_LABEL } from "./sandbox-runner.ts";
 
 const base = (over: Partial<State> = {}): State => ({
@@ -541,6 +541,38 @@ test("resetAgentBranch: deletes local then remote branch for the issue", async (
 test("resetAgentBranch: swallows errors when branch does not exist", async () => {
   const gitRun = () => Promise.reject(new Error("branch not found"));
   await assert.doesNotReject(() => resetAgentBranch(23, gitRun));
+});
+
+// ─── refreshBase (issue #28) ─────────────────────────────────────────────────
+
+test("refreshBase: fetches origin then hard-resets local base to origin/<base>", async () => {
+  const calls: string[][] = [];
+  const gitRun = (args: string[]) => { calls.push(args); return Promise.resolve(); };
+  await refreshBase("main", gitRun);
+  assert.deepEqual(calls[0], ["fetch", "origin", "main"], "must fetch origin first");
+  const reset = calls.find((a) => a[0] === "reset" && a.includes("--hard") && a.includes("origin/main"));
+  assert.ok(reset, "must hard-reset local base to origin/main");
+  // Ordering: fetch precedes reset so the reset targets fresh remote state.
+  assert.ok(calls.indexOf(reset!) > 0, "reset must come after fetch");
+});
+
+test("refreshBase: respects a non-default base branch", async () => {
+  const calls: string[][] = [];
+  const gitRun = (args: string[]) => { calls.push(args); return Promise.resolve(); };
+  await refreshBase("develop", gitRun);
+  assert.deepEqual(calls[0], ["fetch", "origin", "develop"]);
+  assert.ok(calls.some((a) => a[0] === "reset" && a.includes("origin/develop")));
+});
+
+test("refreshBase: a fetch failure is retried, then swallowed without crashing", async () => {
+  let fetchAttempts = 0;
+  const gitRun = (args: string[]) => {
+    if (args[0] === "fetch") { fetchAttempts++; return Promise.reject(new Error("network blip")); }
+    return Promise.resolve();
+  };
+  // Inject a no-op sleep so the retry backoff does not slow the test.
+  await assert.doesNotReject(() => refreshBase("main", gitRun, { sleep: () => Promise.resolve() }));
+  assert.ok(fetchAttempts > 1, "fetch should be retried more than once");
 });
 // ─── Event-driven loop (issue #5) ────────────────────────────────────────────
 
