@@ -1,9 +1,11 @@
 services:
   devcontainer:
-    # Stable name so the docker MCP server (mcp-server-docker) can target it via a
-    # fixed map (ALLOWED_CONTAINERS=devcontainer:agentic-sandbox). One sandbox at a
-    # time; up.sh removes any prior one first.
-    container_name: agentic-sandbox
+    # Per-project container name (#41), derived from the workspace folder by
+    # .devcontainer/init.sh (DEVCONTAINER_NAME in .env) so two projects can run
+    # at once without colliding. The docker MCP server targets it via
+    # ALLOWED_CONTAINERS=devcontainer:<DEVCONTAINER_NAME>. Fallback keeps a bare
+    # `docker compose up` working if .env hasn't been generated yet.
+    container_name: ${DEVCONTAINER_NAME:-devcontainer}
     build:
       context: .
       dockerfile: Dockerfile

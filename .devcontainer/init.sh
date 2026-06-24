@@ -2,20 +2,58 @@
 # Runs on the HOST via initializeCommand before the container is created or started.
 # Idempotent — safe to run on every devcontainer open.
 #
+# Usage:
+#   init.sh <workspace-folder>     generate/refresh .devcontainer/.env (the real run)
+#   init.sh --dry-run <folder>     print the resolved values, write nothing (for tests)
+#
 # Responsibilities:
-#   1. Generate .devcontainer/.env with host-expanded paths (once).
-#   2. Compute workspace bind-mount paths.
+#   1. Derive the per-project names/paths from the workspace folder.
+#   2. Generate .devcontainer/.env with host-expanded paths (once).
 #   3. Pre-create the Claude persist directory on the host.
+#
+# Self-contained: the workspace folder IS the project root that holds this
+# .devcontainer, so VS Code "Reopen in Container" discovers it natively — no
+# AGENTIC_DC_INIT hook or walk-up search (#41).
 #
 # Socket permissions are handled by the docker-outside-of-docker feature at
 # container startup, so no DOCKER_GID detection is needed here.
 set -euo pipefail
+
+DRY_RUN=0
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN=1
+  shift
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARED_ENV="${SCRIPT_DIR}/.env"
 
 WORKSPACE_ROOT="$(cd "${1:-${SCRIPT_DIR}/..}" && pwd)"
 WORKSPACE_BASENAME="$(basename "$WORKSPACE_ROOT")"
+
+# Per-project container name (#41): derive from the workspace folder so two
+# projects can run at once without a name collision. Sanitize to Docker's
+# allowed container-name charset ([a-zA-Z0-9][a-zA-Z0-9_.-]); collapse any other
+# character (incl. dots) to '-', and guarantee an alphanumeric first char.
+derive_container_name() {
+  local base="$1" name
+  name="$(printf '%s' "$base" | sed 's/[^a-zA-Z0-9_-]/-/g')"
+  case "$name" in [a-zA-Z0-9]*) ;; *) name="x-${name}" ;; esac
+  printf '%s' "$name"
+}
+
+DEVCONTAINER_NAME="$(derive_container_name "$WORKSPACE_BASENAME")"
+LOCAL_WORKSPACE_FOLDER="$WORKSPACE_ROOT"
+WORKSPACE_FOLDER="/workspaces/${WORKSPACE_BASENAME}"
+
+if [ "$DRY_RUN" = 1 ]; then
+  # Stable KEY=value output so a run.sh-style test can assert the derivation
+  # without touching the real .env (prior art: run-sh.test.ts).
+  printf 'DEVCONTAINER_NAME=%s\n' "$DEVCONTAINER_NAME"
+  printf 'LOCAL_WORKSPACE_FOLDER=%s\n' "$LOCAL_WORKSPACE_FOLDER"
+  printf 'WORKSPACE_FOLDER=%s\n' "$WORKSPACE_FOLDER"
+  exit 0
+fi
 
 ensure_env() {
   local key="$1" value="$2"
@@ -40,9 +78,10 @@ EOF
   echo "[init] Created .devcontainer/.env"
 fi
 
-upsert_env LOCAL_WORKSPACE_FOLDER "$WORKSPACE_ROOT"
-upsert_env WORKSPACE_FOLDER       "/workspaces/${WORKSPACE_BASENAME}"
-echo "[init] workspace → ${WORKSPACE_ROOT} (mounts at /workspaces/${WORKSPACE_BASENAME})"
+upsert_env LOCAL_WORKSPACE_FOLDER "$LOCAL_WORKSPACE_FOLDER"
+upsert_env WORKSPACE_FOLDER       "$WORKSPACE_FOLDER"
+upsert_env DEVCONTAINER_NAME      "$DEVCONTAINER_NAME"
+echo "[init] workspace → ${WORKSPACE_ROOT} (mounts at ${WORKSPACE_FOLDER}, container '${DEVCONTAINER_NAME}')"
 
 ensure_env SSH_DIR                 "${HOME}/.ssh"
 ensure_env CLAUDE_PERSIST_HOST_DIR "${HOME}/.devcontainer-claude"
