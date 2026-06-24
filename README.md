@@ -1,15 +1,16 @@
 # agentic.dev
 
-A reusable devcontainer that runs an agentic development workflow inside a Docker sandbox. Claude drives the feature lifecycle from requirements to implementation; all shell execution is isolated in the container. **One shared `.devcontainer` serves every project** — each project is a subfolder you spin up on demand.
+A reusable devcontainer that runs an agentic development workflow inside a Docker sandbox. Claude drives the feature lifecycle from requirements to implementation; all shell execution is isolated in the container. **Each project is self-contained** — it carries its own `.devcontainer/`, so `devcontainer up` and VS Code *Reopen in Container* discover it natively, the container is named per project, and two projects can run side by side.
 
 ## TL;DR
 
 ```bash
-bash .devcontainer/init.sh     # one-time: generate .devcontainer/.env on the host
-./up.sh cv                     # spin up the sandbox, mounting ./cv at /workspaces/cv
+./up.sh .                      # spin up THIS project's sandbox (init.sh runs automatically)
                                # …drive the workflow with Claude (see "The workflow")…
-./down.sh cv                   # tear the sandbox down when done
+./down.sh .                    # tear the sandbox down when done
 ```
+
+`./up.sh <folder>` works for any folder that holds its own `.devcontainer/`; the dogfood case is this repo itself (`./up.sh .`). VS Code users can skip `up.sh` entirely and use *Reopen in Container*.
 
 You do **not** need VS Code — the workflow is headless (see [Do I need VS Code?](#do-i-need-vs-code)).
 
@@ -19,8 +20,8 @@ You do **not** need VS Code — the workflow is headless (see [Do I need VS Code
         host (you + Claude Code)                     Docker
    ┌──────────────────────────────┐         ┌──────────────────────┐
    │  /grill /to-prd /to-issues   │         │  service: devcontainer│
-   │  /afk /hitl  ───────────────┐│         │  /workspaces/<folder> │
-   │                  /exec      ││ docker  │  (your ./folder bound)│
+   │  /afk /hitl  ───────────────┐│         │  /workspaces/<project>│
+   │                  /exec      ││ docker  │  (your project bound) │
    │   mcp__docker__run_command ─┼┼─────────►  vscode user          │
    │      (service=devcontainer) ││ compose │  docker CLI (DooD)    │
    └──────────────────────────────┘  exec   └──────────────────────┘
@@ -35,23 +36,21 @@ You do **not** need VS Code — the workflow is headless (see [Do I need VS Code
 
 | Command | What it does |
 |---------|--------------|
-| `bash .devcontainer/init.sh` | One-time on the host: writes `.devcontainer/.env` (paths, persist dir). Idempotent; also re-run automatically by `up.sh`. |
-| `./up.sh <folder>` | Spin up the sandbox for `<folder>`, bound at `/workspaces/<folder>`. Rebuilds the container (image layers stay cached). |
+| `./up.sh <folder>` | Spin up `<folder>`'s sandbox (the folder must hold its own `.devcontainer/`), bound at `/workspaces/<folder>` in a per-project container. Re-runs `init.sh` automatically; rebuilds the container (image layers stay cached). `./up.sh .` brings up this repo. |
 | `./down.sh <folder>` | Tear down the sandbox for `<folder>`. |
 | `./down.sh` | Tear down **all** sandboxes started from this repo (safe — scoped by label, never touches other projects). |
 | `./code.sh <folder>` | *Optional.* Open VS Code attached to the running sandbox, at `/workspaces/<folder>`. |
 | `docker exec -it $(docker ps -q --filter label=devcontainer.local_folder=$PWD/<folder>) bash` | *Optional.* Drop into a shell in the running sandbox without VS Code. |
 
-`up.sh` is a wrapper; the raw equivalent is:
+`up.sh` is a thin wrapper; the raw equivalent is:
 
 ```bash
 devcontainer up \
-  --workspace-folder "$(pwd)/cv" \
-  --config .devcontainer/devcontainer.json \
+  --workspace-folder "$(pwd)" \
   --remove-existing-container
 ```
 
-`--config` is required because the devcontainer CLI only auto-discovers a `.devcontainer/` *inside* the workspace folder, while here it's shared one level up. The workspace path can be **relative or absolute and live anywhere** — `up.sh` exports `AGENTIC_DC_INIT` so the `initializeCommand` runs this repo's `init.sh`. (The under-repo walk-up only matters for VS Code *Reopen in Container*, which doesn't set that variable.)
+No `--config` is needed: the project root holds its own `.devcontainer/`, so the devcontainer CLI (and VS Code *Reopen in Container*) auto-discovers it. The `initializeCommand` runs the in-project `.devcontainer/init.sh`, which derives a per-project container name (`DEVCONTAINER_NAME`, e.g. `agentic-dev`) and writes `.devcontainer/.env`. This replaces the previous shared-`.devcontainer`/`AGENTIC_DC_INIT` model (see [ADR-0012](docs/adr/0012-self-contained-per-project-devcontainer.md)).
 
 ## Do I need VS Code?
 
@@ -114,12 +113,13 @@ Supporting commands:
 
 | File | Role |
 |------|------|
-| `up.sh` | Spin up the shared devcontainer for a subfolder (`./up.sh cv`). |
+| `up.sh` | Thin `devcontainer up` wrapper for a self-contained project (`./up.sh .`). |
 | `down.sh` | Tear down sandboxes from this repo, scoped by label (`./down.sh [folder]`). |
 | `code.sh` | Optional: attach VS Code to a running sandbox at its workspace folder. |
+| `.devcontainer/init.sh` | Host `initializeCommand`: derives the per-project `DEVCONTAINER_NAME` and writes `.devcontainer/.env`. `--dry-run` prints the resolved names without side effects. |
 | `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup`. |
-| `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target. Mounts workspace (`consistency: cached`), SSH (ro), Claude persist dir, Docker socket. |
-| `.devcontainer/devcontainer.json` | `claude-code` + `docker-outside-of-docker` features; walk-up `initializeCommand`; `postCreateCommand` → `claude-persist-setup`. |
+| `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), SSH (ro), Claude persist dir, Docker socket. |
+| `.devcontainer/devcontainer.json` | `claude-code` + `docker-outside-of-docker` features; in-project `initializeCommand` → `init.sh`; `postCreateCommand` → `claude-persist-setup`. |
 | `.devcontainer/init.sh` | Host-side: generates `.env`, pre-creates the persist dir. |
 | `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount. |
 
@@ -189,7 +189,8 @@ Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.js
 ## Notes
 
 - **`consistency: cached`** on the workspace mount is a no-op on modern Docker Desktop (VirtioFS) — kept for correct intent / older osxfs. The real macOS perf levers are VirtioFS (default) and **not** bind-mounting heavy dirs (`node_modules`, `.venv`) — use named volumes for those.
-- **Workspace folder can live anywhere** when launched via `up.sh` (it exports `AGENTIC_DC_INIT`). Only VS Code *Reopen in Container* needs the folder under this repo, since it relies on the walk-up fallback to find `.devcontainer/init.sh`.
+- **Per-project, self-contained.** Each project carries its own `.devcontainer/`, so `up.sh`, `devcontainer up`, and VS Code *Reopen in Container* all discover the config natively (no `--config` split, no `AGENTIC_DC_INIT`). The container is named per project (`DEVCONTAINER_NAME`, derived from the workspace folder), so two projects don't collide. **Tradeoff:** each project keeps its own copy of `.devcontainer/`, so improvements to the shared config must be propagated to each project (e.g. by re-copying or templating) rather than landing everywhere at once. See [ADR-0012](docs/adr/0012-self-contained-per-project-devcontainer.md).
+- **The docker MCP map is per-project.** `/exec` targets the sandbox via `ALLOWED_CONTAINERS=devcontainer:<DEVCONTAINER_NAME>`; for this repo that's `agentic-dev`. Point it at the project's container name (no longer the old fixed `agentic-sandbox`).
 
 ## Credits
 

@@ -9,13 +9,16 @@ full picture — this file is the operating contract.
 - When a sandbox is running, **use `/exec` for all shell commands**, never the Bash tool.
   `/exec` routes to `mcp__docker__run_command(service="devcontainer")` (a `docker compose exec` wrapper).
 - The workflow is **headless** — VS Code is never required. (`code.sh` exists only for the human.)
-- One shared `.devcontainer` serves every project; each project is a subfolder.
+- Each project is **self-contained**: it holds its own `.devcontainer/`, gets a per-project
+  container name (`DEVCONTAINER_NAME`), and is discovered natively by `devcontainer up` /
+  VS Code *Reopen in Container* (ADR-0012). `/exec` targets `devcontainer:<DEVCONTAINER_NAME>`
+  (this repo: `agentic-dev`).
 
 ## Run commands (host)
 
 ```
-bash .devcontainer/init.sh   # one-time: generate .devcontainer/.env
-./up.sh <folder>             # spin up sandbox, mount ./<folder> at /workspaces/<folder>
+./up.sh .                    # spin up THIS project's sandbox (init.sh runs automatically)
+./up.sh <folder>             # any folder holding its own .devcontainer/
 ./down.sh <folder>           # tear down that sandbox   (./down.sh = all from this repo)
 ./code.sh <folder>           # optional: attach VS Code to a running sandbox
 ```
@@ -23,7 +26,7 @@ bash .devcontainer/init.sh   # one-time: generate .devcontainer/.env
 ## Development workflow
 
 ```
-./up.sh <folder>      →  sandbox up at /workspaces/<folder>
+./up.sh .             →  sandbox up at /workspaces/<project>
 /grill-me-with-docs   →  interview + docs/grill-output.md
 /to-prd               →  docs/prd.md
 /to-issues            →  GitHub issues (vertical slices, label: ready-for-agent)
