@@ -15,6 +15,13 @@ RUN apt-get update && apt-get install -y \
 # image with `docker ps --filter label=agentic.sandbox=1` on startup/shutdown.
 LABEL "agentic.sandbox"="1"
 
+# Project dimension (#40) — scopes the orphan sweep so concurrent projects don't
+# reap each other's in-flight sandboxes. Pass `--build-arg AGENTIC_PROJECT=<name>`
+# per project; the empty default marks the image as unowned (legacy behaviour:
+# swept by any project) so single-project builds keep working unchanged.
+ARG AGENTIC_PROJECT=""
+LABEL "agentic.sandbox.project"="${AGENTIC_PROJECT}"
+
 # Build-args for UID/GID alignment: sandcastle's image build defaults these to
 # the host user's UID/GID so image-built files and bind-mounted worktree files
 # share an owner without a runtime chown. The inner image must be UID 1000.

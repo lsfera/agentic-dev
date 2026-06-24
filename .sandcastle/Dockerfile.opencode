@@ -30,6 +30,10 @@ RUN npm install -g opencode-ai@1.17.9
 # so sweepOrphanedSandboxes() can reap crashed local-tier sandboxes too.
 LABEL "agentic.sandbox"="1"
 
+# Project dimension (#40) — see Dockerfile. Empty default = unowned (legacy).
+ARG AGENTIC_PROJECT=""
+LABEL "agentic.sandbox.project"="${AGENTIC_PROJECT}"
+
 USER ${AGENT_UID}:${AGENT_GID}
 
 WORKDIR /home/agent

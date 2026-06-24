@@ -12,7 +12,7 @@ import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduc
 import { parseBlockedBy } from "./issue-source.ts";
 import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent } from "./main.ts";
 import { createHmac } from "node:crypto";
-import { SANDBOX_LABEL } from "./sandbox-runner.ts";
+import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
 const base = (over: Partial<State> = {}): State => ({
   issues: [],
@@ -394,6 +394,62 @@ test("sweepOrphanedSandboxes: docker ps uses SANDBOX_LABEL as the filter", async
     psArgs.includes(`label=${SANDBOX_LABEL}`),
     `docker ps must filter by 'label=${SANDBOX_LABEL}'`,
   );
+});
+
+// ─── Project-scoped sweep (#40) ──────────────────────────────────────────────
+
+test("PROJECT_LABEL_KEY is the agentic.sandbox.project label key", () => {
+  assert.equal(PROJECT_LABEL_KEY, "agentic.sandbox.project");
+});
+
+test("deriveProject: 'owner/name' → name; bare name → name; falls back to cwd basename", () => {
+  assert.equal(deriveProject("lsfera/agentic.dev", "/x/y"), "agentic.dev");
+  assert.equal(deriveProject("agentic.dev", "/x/y"), "agentic.dev");
+  assert.equal(deriveProject(undefined, "/Users/lsfera/dvcs/agentic.dev"), "agentic.dev");
+  assert.equal(deriveProject("", "/Users/lsfera/dvcs/myproj/"), "myproj");
+});
+
+test("sweepOrphanedSandboxes: project requests the project label in the ps format", async () => {
+  let psArgs: string[] = [];
+  const exec = (file: string, args: string[]) => {
+    if (args[0] === "ps") psArgs = args;
+    return Promise.resolve({ stdout: "" });
+  };
+  await sweepOrphanedSandboxes(exec, "agentic.dev");
+  assert.ok(psArgs.includes(`label=${SANDBOX_LABEL}`), "still filters by base label");
+  assert.ok(
+    psArgs.some((a) => a.includes(PROJECT_LABEL_KEY)),
+    `ps format must read the '${PROJECT_LABEL_KEY}' label`,
+  );
+});
+
+test("sweepOrphanedSandboxes: scoped to project — sweeps own + unowned, skips other project", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const exec = (file: string, args: string[]) => {
+    calls.push({ file, args });
+    // own-project, legacy/unowned (empty label), and another project
+    const out = "own111\tagentic.dev\nlegacy222\t\nother333\tother-proj\n";
+    return Promise.resolve({ stdout: args[0] === "ps" ? out : "" });
+  };
+  const count = await sweepOrphanedSandboxes(exec, "agentic.dev");
+  assert.equal(count, 2, "own-project + unowned containers are swept");
+  const rm = calls.find((c) => c.args[0] === "rm")!;
+  assert.ok(rm.args.includes("own111"), "own-project container swept");
+  assert.ok(rm.args.includes("legacy222"), "unowned (legacy) container swept");
+  assert.ok(!rm.args.includes("other333"), "other project's container must NOT be swept");
+});
+
+test("sweepOrphanedSandboxes: no project arg → sweeps every agentic sandbox (legacy behaviour)", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const exec = (file: string, args: string[]) => {
+    calls.push({ file, args });
+    const out = "a\tagentic.dev\nb\tother-proj\nc\t\n";
+    return Promise.resolve({ stdout: args[0] === "ps" ? out : "" });
+  };
+  const count = await sweepOrphanedSandboxes(exec);
+  assert.equal(count, 3, "unscoped sweep removes all agentic sandboxes regardless of project");
+  const rm = calls.find((c) => c.args[0] === "rm")!;
+  assert.ok(["a", "b", "c"].every((id) => rm.args.includes(id)));
 });
 
 // ─── Concurrency env-var ─────────────────────────────────────────────────────
