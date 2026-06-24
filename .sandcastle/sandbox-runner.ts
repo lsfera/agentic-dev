@@ -27,6 +27,23 @@ const COMPLETION_SIGNAL = "<promise>ISSUE_COMPLETE</promise>";
  */
 export const SANDBOX_LABEL = "agentic.sandbox=1";
 
+/**
+ * Docker label *key* carrying the project a sandbox belongs to. Baked into the
+ * per-project inner image at build time (Dockerfile `ARG AGENTIC_PROJECT` →
+ * `LABEL`) and inherited by every container. Used to scope the orphan sweep so
+ * one project never reaps another project's in-flight sandboxes (#40). Legacy
+ * images built before this label simply carry an empty value and are treated as
+ * unowned (swept by any project) for backward compatibility.
+ */
+export const PROJECT_LABEL_KEY = "agentic.sandbox.project";
+
+/** Derive the project identifier from an "owner/name" repo or a directory path. */
+export function deriveProject(repo: string | undefined, cwd: string): string {
+  if (repo && repo.includes("/")) return repo.split("/").pop()!.trim();
+  if (repo && repo.trim()) return repo.trim();
+  return cwd.replace(/\/+$/, "").split("/").pop() ?? "";
+}
+
 export interface SandboxOutcome {
   readonly branch: string;
   readonly commits: { sha: string }[];

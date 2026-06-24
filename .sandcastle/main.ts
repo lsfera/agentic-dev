@@ -30,7 +30,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { reduce, READY_LABEL, type State, type Pr, type Policy, type Mode } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
-import { SandboxRunner, SANDBOX_LABEL } from "./sandbox-runner.ts";
+import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
 export { SANDBOX_LABEL };
 
@@ -130,7 +130,7 @@ export async function refreshBase(
 }
 
 /**
- * Remove all containers that carry the agentic sandbox label.
+ * Remove orphaned containers that carry the agentic sandbox label.
  *
  * Called on startup (sweeps orphans from a previous crashed run) and at the
  * end of main() (confirms no containers linger after a clean exit). Each
@@ -138,21 +138,43 @@ export async function refreshBase(
  * sandcastle's internal lifecycle management; this sweep is a belt-and-
  * suspenders backstop for the SIGKILL / OOM case where those hooks never fire.
  *
+ * When `project` is given the sweep is scoped to that project (#40): a
+ * container is removed only if its `agentic.sandbox.project` label matches —
+ * or is empty (a legacy image built before the label existed, treated as
+ * unowned). Containers labelled for a *different* project are left untouched,
+ * so once multiple projects run concurrently one project's sweep never
+ * force-removes another's in-flight sandboxes. Omitting `project` keeps the
+ * original behaviour (sweep every agentic sandbox).
+ *
  * Accepts an optional exec shim for unit testing.
  */
-export async function sweepOrphanedSandboxes(exec: ShellExec = sh as ShellExec): Promise<number> {
+export async function sweepOrphanedSandboxes(
+  exec: ShellExec = sh as ShellExec,
+  project?: string,
+): Promise<number> {
   try {
     const { stdout } = await exec("docker", [
-      "ps", "-a", "-q", "--no-trunc",
+      "ps", "-a", "--no-trunc",
       "--filter", `label=${SANDBOX_LABEL}`,
+      "--format", `{{.ID}}\t{{.Label "${PROJECT_LABEL_KEY}"}}`,
     ]);
     const ids = String(stdout)
       .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
+      .map((line) => {
+        const [id, labelProject = ""] = line.split("\t");
+        return { id: id.trim(), labelProject: labelProject.trim() };
+      })
+      .filter(({ id }) => id.length > 0)
+      // Scope to this project: keep own-project containers and legacy/unowned
+      // (empty-label) ones; never touch another project's containers.
+      .filter(({ labelProject }) => !project || labelProject === "" || labelProject === project)
+      .map(({ id }) => id);
     if (ids.length === 0) return 0;
     await exec("docker", ["rm", "-f", ...ids]);
-    console.log(`[afk] swept ${ids.length} orphaned sandbox container(s)`);
+    console.log(
+      `[afk] swept ${ids.length} orphaned sandbox container(s)` +
+        (project ? ` for project '${project}'` : ""),
+    );
     return ids.length;
   } catch {
     return 0;
@@ -349,12 +371,16 @@ export function startSmeeListener(
 }
 
 async function main(): Promise<void> {
-  // Startup sweep: remove orphaned containers from any previous crashed run.
-  await sweepOrphanedSandboxes();
-
   const repo = process.env.AGENTIC_REPO;
   const base = process.env.AGENTIC_BASE_BRANCH ?? "main";
   const repoRoot = process.cwd();
+  // Project identity scopes the orphan sweep so concurrent projects don't reap
+  // each other's in-flight sandboxes (#40).
+  const project = deriveProject(repo, repoRoot);
+
+  // Startup sweep: remove this project's orphaned containers from any previous
+  // crashed run.
+  await sweepOrphanedSandboxes(sh as ShellExec, project);
 
   const issues = new IssueSource(repo);
   const tier = (process.env.AGENTIC_TIER ?? "claude") as "claude" | "local";
@@ -483,7 +509,7 @@ async function main(): Promise<void> {
     if (actions.some((a) => a.type === "Stop")) {
       console.log(`[${mode}] nothing ready, nothing in flight — done.`);
       // Shutdown sweep: confirm no containers linger after a clean exit.
-      await sweepOrphanedSandboxes();
+      await sweepOrphanedSandboxes(sh as ShellExec, project);
       return;
     }
 
