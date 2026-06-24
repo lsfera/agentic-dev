@@ -8,13 +8,20 @@ to review and merge. The loop keeps polling until you act (merge or close).
 
 Same as `/afk` — see that command.
 
+## Arguments
+
+Same as `/afk` — `$ARGUMENTS` steer the tier and model (e.g. `/hitl local`,
+`/hitl --tier local --model qwen2.5-coder:32b`). See [/afk](afk.md#arguments)
+for the full table and resolution rules.
+
 ## Run
 
+`.sandcastle/run.sh` handles `cd` to the path-matched mount, `npm install`,
+sourcing `orchestrator.env`, and launching via `tsx` (same as `/afk`). Pass
+`$ARGUMENTS` through:
+
 ```
-cd "$LOCAL_WORKSPACE_FOLDER" \
-  && (cd .sandcastle && npm install) \
-  && set -a && . .sandcastle/orchestrator.env && set +a \
-  && AGENTIC_MODE=hitl ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+bash "${LOCAL_WORKSPACE_FOLDER}/.sandcastle/run.sh" hitl $ARGUMENTS
 ```
 
 ## Behavior

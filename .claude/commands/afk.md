@@ -5,6 +5,28 @@ it runs inside the outer devcontainer and works each `ready-for-agent` GitHub
 issue in its own disposable, git-isolated sandbox, opening a PR per issue. The
 old host-sub-agent loop is gone — the engine now lives in `.sandcastle/`.
 
+## Arguments
+
+Steer the tier and model **without editing env files** — pass `$ARGUMENTS`
+straight to `.sandcastle/run.sh`, which resolves them to the env vars below
+(arguments override `orchestrator.env`). Anything omitted keeps its default.
+Both positional (`/afk local qwen3-coder:30b`) and flag (`/afk --tier local
+--model qwen3-coder:30b`) forms work.
+
+| Argument | Sets | Example |
+|----------|------|---------|
+| `local` | `AGENTIC_TIER=local` (Ollama via opencode) | `/afk local` |
+| `claude` | `AGENTIC_TIER=claude` (default) | `/afk claude` |
+| a bare model name | the **active tier's** model — `AGENTIC_LOCAL_MODEL=ollama/<m>` for the local tier, else `AGENTIC_MODEL=<m>` | `/afk local qwen2.5-coder:32b` |
+| `--tier <t>` / `--model <m>` | explicit tier / model | `/afk --tier local --model qwen2.5-coder:32b` |
+| `--base <branch>` | `AGENTIC_BASE_BRANCH` | `/afk --base develop` |
+| `--concurrency <n>` | `AGENTIC_CONCURRENCY` | `/afk --concurrency 2` |
+
+For the local tier a model missing the `ollama/` prefix gets it added. No
+arguments → default behavior (claude tier, `claude-sonnet-4-6`). The mapping
+lives in `.sandcastle/run.sh` and is covered by `run-sh.test.ts`; `run.sh
+afk … --dry-run` prints the resolved `AGENTIC_*` env without launching.
+
 ## Prereqs (one-time)
 
 - Bring the devcontainer up for this repo root (the dogfood "repo works on
@@ -23,22 +45,20 @@ old host-sub-agent loop is gone — the engine now lives in `.sandcastle/`.
 ## Run
 
 Drive everything through `/exec` (routes to the devcontainer, service
-`devcontainer`). Run from the **path-matched mount** `${LOCAL_WORKSPACE_FOLDER}`
-so the worktrees sandcastle creates resolve under docker-outside-of-docker
-(ADR-0011) — not from `/workspaces/<folder>`:
+`devcontainer`). `.sandcastle/run.sh` does the setup — `cd` to the path-matched
+mount `${LOCAL_WORKSPACE_FOLDER}` (so sandcastle's worktrees resolve under
+docker-outside-of-docker, ADR-0011), `npm install`, source `orchestrator.env`
+(`GH_TOKEN` for the orchestrator's own `gh` calls — never forwarded to the
+sandboxes), then launch via `.sandcastle`'s own `tsx`. Pass `$ARGUMENTS`
+straight through (see [Arguments](#arguments)):
 
 ```
-cd "$LOCAL_WORKSPACE_FOLDER" \
-  && (cd .sandcastle && npm install) \
-  && set -a && . .sandcastle/orchestrator.env && set +a \
-  && AGENTIC_MODE=afk ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+bash "${LOCAL_WORKSPACE_FOLDER}/.sandcastle/run.sh" afk $ARGUMENTS
 ```
 
-`cd "$LOCAL_WORKSPACE_FOLDER"` keeps the orchestrator's `process.cwd()` (and
-thus sandcastle's `cwd`) on the host-resolvable path; invoking `.sandcastle`'s
-own `tsx` resolves `@ai-hero/sandcastle` from `.sandcastle/node_modules`.
-Sourcing `orchestrator.env` puts `GH_TOKEN` in the orchestrator's environment so
-its `gh` calls authenticate; it is not forwarded to the sandboxes.
+Examples: `run.sh afk`, `run.sh afk local`, `run.sh afk local qwen2.5-coder:32b`,
+`run.sh afk --base develop --concurrency 2`. Use `--dry-run` to print the
+resolved `AGENTIC_*` env without launching.
 
 ## Behavior
 
@@ -70,9 +90,9 @@ docker build -t sandcastle-opencode:local -f .sandcastle/Dockerfile.opencode .sa
 The `opencode.json` at the repo root is copied into each worktree automatically
 via `copyToWorktree` and configures the Ollama provider.
 
-## Not yet wired (later issues)
+## Status
 
-Auto-merge on green CI (#3), `/hitl` merge gate (#4), event-driven smee loop
-(#5), dependency-ordered unblocking (#2), concurrency > 1 (#6), and orphan
-teardown (#8). This wrapper is the slice-1 walking skeleton: one issue →
-sandbox → PR, serial, poll-once.
+The full roadmap is wired: dependency-ordered unblocking (#2), auto-merge on
+green CI (#3), `/hitl` merge gate (#4), event-driven smee loop (#5),
+concurrency cap (#6), local Ollama tier (#7), orphan teardown (#8), plus
+base-branch refresh (#28) and stale-branch reset (#23) before each run.
