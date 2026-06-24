@@ -95,6 +95,41 @@ export async function resetAgentBranch(issueId: number, gitRun: GitRun): Promise
 }
 
 /**
+ * Refresh the local base branch to match the remote before a sandbox branch is
+ * cut from it. The orchestrator branches each `agent/issue-N` off the host's
+ * *local* base; if local base is stale (not pulled after an earlier PR merged),
+ * the new branch is based on an old commit and its PR conflicts at merge time
+ * (#28 — bit the #15 and #23 runs). Fetch + hard-reset the local base to
+ * `origin/<base>` so every sandbox branches from current origin.
+ *
+ * Best-effort and non-fatal: the fetch is retried (withRetry) and any failure
+ * is logged but swallowed — a refresh failure must not crash the run; the
+ * sandbox proceeds from whatever base exists. Complements resetAgentBranch
+ * (#23): that deletes the stale *branch*, this refreshes the *base*. Injectable
+ * gitRun + sleep for unit testing.
+ */
+export async function refreshBase(
+  base: string,
+  gitRun: GitRun,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> {
+  try {
+    await withRetry(() => gitRun(["fetch", "origin", base]), {
+      label: `fetch origin ${base}`,
+      sleep: opts.sleep,
+    });
+    await gitRun(["checkout", base]);
+    await gitRun(["reset", "--hard", `origin/${base}`]);
+  } catch (err) {
+    console.warn(
+      `[base-refresh] could not refresh '${base}' from origin ` +
+        `(continuing on existing base):`,
+      err,
+    );
+  }
+}
+
+/**
  * Remove all containers that carry the agentic sandbox label.
  *
  * Called on startup (sweeps orphans from a previous crashed run) and at the
@@ -470,6 +505,12 @@ async function processIssue(
   // Claim: drop the ready label so the next tick won't re-pick this issue.
   await issues.removeLabel(n, READY_LABEL);
   console.log(`[${mode}] #${n} "${issue.title}" claimed → sandbox`);
+
+  // Refresh the base branch from origin so the sandbox branch is cut from the
+  // current origin/<base>, not a stale local HEAD that would conflict at merge
+  // time (#28). Runs before resetAgentBranch so the recreated branch is based
+  // on fresh origin.
+  await refreshBase(base, (args) => sh("git", args, { cwd: repoRoot }));
 
   // Delete any stale agent/issue-N branch (local + remote) left by a prior
   // failed/partial run, so sandcastle branches from the current base instead
