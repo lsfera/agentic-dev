@@ -14,6 +14,10 @@ Do **not** replace `/workspaces/<folder>` (that would churn `devcontainer.json` 
 
 Done as a single additive bind mount in `.devcontainer/docker-compose.yml` (target == source == `${LOCAL_WORKSPACE_FOLDER}`), alongside the existing `/workspaces/<basename>` mount. No change to `init.sh` (it already exports `LOCAL_WORKSPACE_FOLDER`), `devcontainer.json`, or `up.sh`. After `./down.sh` + `./up.sh`, Beat 1 ran green **in the real `agentic-sandbox`** (as `vscode`, socket group via the DooD feature, no chmod): worktree resolved to the host path, commit landed on `spike/beat-1`. Still TODO in the orchestrator: make `/afk`'s `/exec` run from `${LOCAL_WORKSPACE_FOLDER}` (ADR-0006) so sandcastle's cwd is the path-matched mount.
 
+## Update — simpler under the self-contained model (ADR-0012, 2026-06-24)
+
+Once each project became self-contained (its root holds its own `.devcontainer/`, named per project), this path-match is conceptually simpler: **project root = the `/workspaces/<project>` mount = the `.devcontainer/` config location**, all the same host directory. The parallel `target == source == ${LOCAL_WORKSPACE_FOLDER}` bind mount and the "run the orchestrator from the host-path mount" rule are unchanged — only the surrounding model is cleaner, and the inner sandbox image now also carries a per-project `agentic.sandbox.project` label so the orphan sweep is project-scoped (#40).
+
 ## Consequences
 
 - Keeps DooD — no privileged container, no docker-in-docker. The outer devcontainer stays lightweight.
