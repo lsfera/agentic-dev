@@ -209,6 +209,44 @@ type SmeeHandler = (
   deliveryId: string,
 ) => void | Promise<void>;
 
+export interface SmeeEvent {
+  readonly body: unknown;
+  readonly headers: Record<string, string>;
+  readonly deliveryId: string;
+}
+
+/**
+ * Parse one smee.io SSE `data:` JSON payload into body + normalized headers.
+ *
+ * smee flattens the original webhook headers to the TOP LEVEL of the payload,
+ * alongside `body` (and its own `query`/`timestamp` fields) — it does NOT nest
+ * them under a `headers` key. Reading headers from a `headers` sub-object
+ * therefore finds nothing, so the listener's `x-github-event` check never
+ * matches and every delivery is silently dropped — only the reconcile poll
+ * fires. Confirmed against a live GitHub→smee delivery (#26).
+ *
+ * Both shapes are supported: a nested `headers` object when present (some
+ * relays), otherwise every top-level key except smee's wrapper fields is taken
+ * as a header. Keys are lowercased; array values take the first element.
+ */
+export function parseSmeeEvent(rawData: string): SmeeEvent {
+  const parsed = JSON.parse(rawData) as Record<string, unknown>;
+  const body = parsed["body"] ?? parsed;
+
+  const WRAPPER_KEYS = new Set(["body", "query", "timestamp"]);
+  const nested = parsed["headers"];
+  const rawHdrs: Record<string, unknown> =
+    nested && typeof nested === "object"
+      ? (nested as Record<string, unknown>)
+      : Object.fromEntries(Object.entries(parsed).filter(([k]) => !WRAPPER_KEYS.has(k)));
+
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawHdrs)) {
+    headers[k.toLowerCase()] = Array.isArray(v) ? String((v as unknown[])[0]) : String(v);
+  }
+  return { body, headers, deliveryId: headers["x-github-delivery"] ?? "" };
+}
+
 /**
  * Subscribe to a smee.io (or compatible) SSE channel and invoke the handler
  * on each webhook delivery. Reconnects automatically on disconnect.
@@ -252,18 +290,7 @@ export function startSmeeListener(
               if (dataLines.length > 0 && eventType === "message") {
                 const rawData = dataLines.join("\n");
                 try {
-                  const parsed = JSON.parse(rawData) as Record<string, unknown>;
-                  const body = parsed["body"] ?? parsed;
-                  const rawHdrs = (parsed["headers"] ?? {}) as Record<string, unknown>;
-
-                  const headers: Record<string, string> = {};
-                  for (const [k, v] of Object.entries(rawHdrs)) {
-                    headers[k.toLowerCase()] = Array.isArray(v)
-                      ? String((v as unknown[])[0])
-                      : String(v);
-                  }
-
-                  const deliveryId = headers["x-github-delivery"] ?? "";
+                  const { body, headers, deliveryId } = parseSmeeEvent(rawData);
 
                   // Advisory signature check only — the secret channel URL is
                   // the trust boundary; smee's body re-serialization means a

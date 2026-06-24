@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery } from "./main.ts";
+import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL } from "./sandbox-runner.ts";
 
@@ -609,6 +609,38 @@ test("classifyDelivery: smee number reformatting yields mismatch on a genuine bo
 
 test("validateSignature: rejects a signature of the wrong length without throwing", () => {
   assert.equal(validateSignature("s", "{}", "sha256=short"), false);
+});
+
+test("parseSmeeEvent: reads headers from smee's TOP-LEVEL keys (real shape, #26)", () => {
+  // smee flattens webhook headers to the top level beside body/query/timestamp,
+  // NOT under a `headers` key. This is the live-confirmed payload shape.
+  const raw = JSON.stringify({
+    host: "smee.io",
+    "x-github-event": "pull_request",
+    "x-github-delivery": "ed95b190-6faa-11f1",
+    "x-hub-signature-256": "sha256=abc",
+    body: { action: "closed", pull_request: { merged: true, head: { ref: "agent/issue-9998" } } },
+    query: {},
+    timestamp: 1782291587870,
+  });
+  const ev = parseSmeeEvent(raw);
+  assert.equal(ev.headers["x-github-event"], "pull_request");
+  assert.equal(ev.deliveryId, "ed95b190-6faa-11f1");
+  assert.equal(ev.headers["x-hub-signature-256"], "sha256=abc");
+  // body is unwrapped; smee wrapper fields are not leaked as headers
+  assert.equal((ev.body as { action: string }).action, "closed");
+  assert.equal(ev.headers["timestamp"], undefined);
+  assert.equal(ev.headers["body"], undefined);
+});
+
+test("parseSmeeEvent: still supports a nested headers object (relay compatibility)", () => {
+  const raw = JSON.stringify({
+    headers: { "X-GitHub-Event": "pull_request", "X-GitHub-Delivery": "d1" },
+    body: { action: "opened" },
+  });
+  const ev = parseSmeeEvent(raw);
+  assert.equal(ev.headers["x-github-event"], "pull_request"); // lowercased
+  assert.equal(ev.deliveryId, "d1");
 });
 
 // ─── Event-driven loop (issue #5) ────────────────────────────────────────────

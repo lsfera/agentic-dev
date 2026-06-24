@@ -153,5 +153,3 @@ Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.js
 
 - **`consistency: cached`** on the workspace mount is a no-op on modern Docker Desktop (VirtioFS) — kept for correct intent / older osxfs. The real macOS perf levers are VirtioFS (default) and **not** bind-mounting heavy dirs (`node_modules`, `.venv`) — use named volumes for those.
 - **Workspace folder can live anywhere** when launched via `up.sh` (it exports `AGENTIC_DC_INIT`). Only VS Code *Reopen in Container* needs the folder under this repo, since it relies on the walk-up fallback to find `.devcontainer/init.sh`.
-
-<!-- smee live-test 085849 -->
