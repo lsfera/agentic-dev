@@ -8,14 +8,23 @@ to review and merge. The loop keeps polling until you act (merge or close).
 
 Same as `/afk` — see that command.
 
+## Arguments
+
+Same as `/afk` — `$ARGUMENTS` steer the tier and model (e.g. `/hitl local`,
+`/hitl --tier local --model qwen2.5-coder:32b`). See [/afk](afk.md#arguments)
+for the full table and resolution rules.
+
 ## Run
 
 ```
 cd "$LOCAL_WORKSPACE_FOLDER" \
   && (cd .sandcastle && npm install) \
   && set -a && . .sandcastle/orchestrator.env && set +a \
-  && AGENTIC_MODE=hitl ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+  && AGENTIC_MODE=hitl <RESOLVED_ARGS> ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
 ```
+
+`<RESOLVED_ARGS>` is the env assignments derived from `$ARGUMENTS` (empty with
+no arguments) — see [/afk](afk.md#arguments).
 
 ## Behavior
 

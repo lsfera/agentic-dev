@@ -5,6 +5,30 @@ it runs inside the outer devcontainer and works each `ready-for-agent` GitHub
 issue in its own disposable, git-isolated sandbox, opening a PR per issue. The
 old host-sub-agent loop is gone — the engine now lives in `.sandcastle/`.
 
+## Arguments
+
+`/afk` takes optional arguments so you can steer the tier and model **without
+editing env files**. Parse `$ARGUMENTS`, map them to the env vars below, and
+prepend those assignments to the launch command; anything omitted keeps its
+default. Both positional (`/afk local qwen3-coder:30b`) and flag
+(`/afk --tier local --model qwen3-coder:30b`) forms are accepted.
+
+| Argument | Sets | Example |
+|----------|------|---------|
+| `local` | `AGENTIC_TIER=local` (Ollama via opencode) | `/afk local` |
+| `claude` | `AGENTIC_TIER=claude` (default) | `/afk claude` |
+| a bare model name | the **active tier's** model — `AGENTIC_LOCAL_MODEL=ollama/<m>` for the local tier, else `AGENTIC_MODEL=<m>` | `/afk local qwen2.5-coder:32b` |
+| `--tier <t>` / `--model <m>` | explicit `AGENTIC_TIER` / model | `/afk --tier local --model qwen2.5-coder:32b` |
+| `--base <branch>` | `AGENTIC_BASE_BRANCH` | `/afk --base develop` |
+| `--concurrency <n>` | `AGENTIC_CONCURRENCY` | `/afk --concurrency 2` |
+
+Resolution rules:
+- A bare model name with no tier keyword applies to the selected tier (default
+  `claude`). For the local tier, a model missing the `ollama/` prefix gets it
+  added (`qwen3-coder:30b` → `ollama/qwen3-coder:30b`).
+- No arguments → current default behavior (claude tier, `claude-sonnet-4-6`).
+- If an argument is ambiguous, state how you interpreted it before running.
+
 ## Prereqs (one-time)
 
 - Bring the devcontainer up for this repo root (the dogfood "repo works on
@@ -31,8 +55,13 @@ so the worktrees sandcastle creates resolve under docker-outside-of-docker
 cd "$LOCAL_WORKSPACE_FOLDER" \
   && (cd .sandcastle && npm install) \
   && set -a && . .sandcastle/orchestrator.env && set +a \
-  && AGENTIC_MODE=afk ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+  && AGENTIC_MODE=afk <RESOLVED_ARGS> ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
 ```
+
+`<RESOLVED_ARGS>` is the space-separated env assignments you derived from
+`$ARGUMENTS` (see [Arguments](#arguments)) — e.g. `/afk local qwen2.5-coder:32b`
+becomes `AGENTIC_TIER=local AGENTIC_LOCAL_MODEL=ollama/qwen2.5-coder:32b`. With
+no arguments it is empty.
 
 `cd "$LOCAL_WORKSPACE_FOLDER"` keeps the orchestrator's `process.cwd()` (and
 thus sandcastle's `cwd`) on the host-resolvable path; invoking `.sandcastle`'s
@@ -70,9 +99,9 @@ docker build -t sandcastle-opencode:local -f .sandcastle/Dockerfile.opencode .sa
 The `opencode.json` at the repo root is copied into each worktree automatically
 via `copyToWorktree` and configures the Ollama provider.
 
-## Not yet wired (later issues)
+## Status
 
-Auto-merge on green CI (#3), `/hitl` merge gate (#4), event-driven smee loop
-(#5), dependency-ordered unblocking (#2), concurrency > 1 (#6), and orphan
-teardown (#8). This wrapper is the slice-1 walking skeleton: one issue →
-sandbox → PR, serial, poll-once.
+The full roadmap is wired: dependency-ordered unblocking (#2), auto-merge on
+green CI (#3), `/hitl` merge gate (#4), event-driven smee loop (#5),
+concurrency cap (#6), local Ollama tier (#7), orphan teardown (#8), plus
+base-branch refresh (#28) and stale-branch reset (#23) before each run.
