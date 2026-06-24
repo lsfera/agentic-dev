@@ -4,7 +4,7 @@
   "service": "devcontainer",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 
-  "initializeCommand": "bash -c 'ws=\"$1\"; if [ -n \"${AGENTIC_DC_INIT:-}\" ] && [ -f \"$AGENTIC_DC_INIT\" ]; then exec bash \"$AGENTIC_DC_INIT\" \"$ws\"; fi; d=\"$ws\"; while [ \"$d\" != \"/\" ]; do if [ -f \"$d/.devcontainer/init.sh\" ]; then exec bash \"$d/.devcontainer/init.sh\" \"$ws\"; fi; d=$(dirname \"$d\"); done; echo \"init.sh not found above $ws (set AGENTIC_DC_INIT or run via up.sh)\" >&2; exit 1' -- ${localWorkspaceFolder}",
+  "initializeCommand": "bash ${localWorkspaceFolder}/.devcontainer/init.sh ${localWorkspaceFolder}",
 
   "features": {
     "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},

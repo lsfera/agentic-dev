@@ -6,7 +6,7 @@
   "scripts": {
     "start": "tsx main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test reduce.test.ts sandbox-runner.test.ts run-sh.test.ts",
+    "test": "node --import tsx --test reduce.test.ts sandbox-runner.test.ts run-sh.test.ts init-sh.test.ts",
     "test:integration": "SANDCASTLE_INTEGRATION=1 node --import tsx --test integration.test.ts"
   },
   "devDependencies": {
