@@ -8,13 +8,17 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const sh = promisify(execFile);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const UP = join(REPO_ROOT, "up.sh");
+// The checkout basename varies (local 'agentic.dev', CI 'agentic-dev'), so derive
+// the expected container name the same way init.sh does instead of hardcoding it.
+const REPO_BASE = basename(REPO_ROOT);
+const EXPECTED_CONTAINER = REPO_BASE.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/^([^a-zA-Z0-9])/, "x-$1");
 
 /** Run up.sh <args> --dry-run; return the printed KEY=value map. */
 async function dryRun(args: string[]): Promise<Record<string, string>> {
@@ -27,10 +31,10 @@ async function dryRun(args: string[]): Promise<Record<string, string>> {
   return out;
 }
 
-test("up.sh: dogfood repo resolves to the per-project container 'agentic-dev'", async () => {
+test("up.sh: dogfood repo resolves to its per-project container name", async () => {
   const out = await dryRun([REPO_ROOT]);
-  assert.equal(out.CONTAINER, "agentic-dev");
-  assert.ok(out.WS_ABS.endsWith("/agentic.dev"), out.WS_ABS);
+  assert.equal(out.CONTAINER, EXPECTED_CONTAINER);
+  assert.ok(out.WS_ABS.endsWith(`/${REPO_BASE}`), out.WS_ABS);
   assert.equal(out.OPEN_CODE, "0");
 });
 
