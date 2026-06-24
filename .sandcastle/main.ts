@@ -177,6 +177,32 @@ export function validateSignature(
   return diff === 0;
 }
 
+/** Outcome of checking a smee-relayed delivery's signature (#26). */
+export type SignatureVerdict = "verified" | "mismatch" | "missing-signature" | "no-secret";
+
+/**
+ * Advisory signature check for a smee-relayed webhook delivery.
+ *
+ * AUTH MODEL (#26): the unguessable smee channel URL is the real trust boundary,
+ * NOT the HMAC. smee re-parses and re-serializes the request body before
+ * relaying it, so the raw bytes GitHub signed are gone by the time we see it.
+ * Re-stringifying the parsed body reproduces GitHub's exact bytes for *most*
+ * payloads, but not all: e.g. JSON numbers are reformatted (`1.0`→`1`, `5e2`→
+ * `500`), which makes a strict HMAC reject a perfectly genuine delivery. We
+ * therefore compute the verdict for observability but NEVER hard-reject on it —
+ * the caller logs and proceeds. (To restore strict HMAC as a gate, put a
+ * raw-body-preserving relay in front of the orchestrator instead of smee.)
+ */
+export function classifyDelivery(
+  secret: string | undefined,
+  reserializedBody: string,
+  signature: string | undefined,
+): SignatureVerdict {
+  if (!secret) return "no-secret";
+  if (!signature) return "missing-signature";
+  return validateSignature(secret, reserializedBody, signature) ? "verified" : "mismatch";
+}
+
 type SmeeHandler = (
   body: unknown,
   headers: Record<string, string>,
@@ -239,20 +265,25 @@ export function startSmeeListener(
 
                   const deliveryId = headers["x-github-delivery"] ?? "";
 
-                  if (secret) {
-                    const sig = headers["x-hub-signature-256"];
-                    if (!sig) {
-                      console.warn("[smee] missing X-Hub-Signature-256 — rejected");
-                      dataLines = [];
-                      eventType = "message";
-                      continue;
-                    }
-                    if (!validateSignature(secret, JSON.stringify(body), sig)) {
-                      console.warn("[smee] invalid HMAC signature — rejected");
-                      dataLines = [];
-                      eventType = "message";
-                      continue;
-                    }
+                  // Advisory signature check only — the secret channel URL is
+                  // the trust boundary; smee's body re-serialization means a
+                  // strict HMAC would drop genuine deliveries (#26). Log the
+                  // verdict, never reject on it.
+                  const verdict = classifyDelivery(
+                    secret,
+                    JSON.stringify(body),
+                    headers["x-hub-signature-256"],
+                  );
+                  if (verdict === "mismatch") {
+                    console.warn(
+                      "[smee] HMAC mismatch — likely smee body re-serialization, " +
+                        "not forgery; processing anyway (channel URL is the trust boundary, #26)",
+                    );
+                  } else if (verdict === "missing-signature") {
+                    console.warn(
+                      "[smee] no X-Hub-Signature-256 header; processing anyway " +
+                        "(channel URL is the trust boundary, #26)",
+                    );
                   }
 
                   void handler(body, headers, deliveryId);

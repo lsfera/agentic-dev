@@ -10,7 +10,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase } from "./main.ts";
+import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery } from "./main.ts";
+import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL } from "./sandbox-runner.ts";
 
 const base = (over: Partial<State> = {}): State => ({
@@ -574,6 +575,42 @@ test("refreshBase: a fetch failure is retried, then swallowed without crashing",
   await assert.doesNotReject(() => refreshBase("main", gitRun, { sleep: () => Promise.resolve() }));
   assert.ok(fetchAttempts > 1, "fetch should be retried more than once");
 });
+// ─── smee signature handling (issue #26) ─────────────────────────────────────
+
+const sigFor = (secret: string, raw: string) =>
+  `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
+
+test("classifyDelivery: no secret configured → no-secret", () => {
+  assert.equal(classifyDelivery(undefined, "{}", "sha256=whatever"), "no-secret");
+});
+
+test("classifyDelivery: secret set but no signature header → missing-signature", () => {
+  assert.equal(classifyDelivery("s", "{}", undefined), "missing-signature");
+});
+
+test("classifyDelivery: matching signature → verified", () => {
+  const raw = '{"action":"closed"}';
+  assert.equal(classifyDelivery("s", raw, sigFor("s", raw)), "verified");
+});
+
+test("classifyDelivery: wrong signature → mismatch (but caller still proceeds)", () => {
+  assert.equal(classifyDelivery("s", '{"action":"closed"}', sigFor("s", "tampered")), "mismatch");
+});
+
+test("classifyDelivery: smee number reformatting yields mismatch on a genuine body", () => {
+  // GitHub signs the raw bytes; smee re-serializes the parsed body, reformatting
+  // numbers (1.0→1). The verdict is 'mismatch' even though the delivery is real
+  // — this is exactly why the check is advisory, not a gate (#26).
+  const rawFromGitHub = '{"id":1.0}';
+  const reserialized = JSON.stringify(JSON.parse(rawFromGitHub)); // "{\"id\":1}"
+  assert.notEqual(rawFromGitHub, reserialized);
+  assert.equal(classifyDelivery("s", reserialized, sigFor("s", rawFromGitHub)), "mismatch");
+});
+
+test("validateSignature: rejects a signature of the wrong length without throwing", () => {
+  assert.equal(validateSignature("s", "{}", "sha256=short"), false);
+});
+
 // ─── Event-driven loop (issue #5) ────────────────────────────────────────────
 
 test("duplicate PrMerged for already-processed PR emits no StartSandbox", () => {
