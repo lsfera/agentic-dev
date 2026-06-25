@@ -181,6 +181,55 @@ export async function sweepOrphanedSandboxes(
   }
 }
 
+/** Default inner-sandbox network name and MTU (#48). */
+export const SANDBOX_NETWORK = process.env.AGENTIC_SANDBOX_NETWORK ?? "agentic-sandbox-net";
+export const SANDBOX_MTU = process.env.AGENTIC_SANDBOX_MTU ?? "1400";
+
+/**
+ * Ensure a Docker network with a path-correct MTU exists for inner sandboxes (#48).
+ *
+ * Docker Desktop's default bridge advertises MTU 65535 while the real
+ * container→host→internet path is ~1400 bytes; with PMTUD black-holed, small
+ * requests pass but the agent's *streaming* responses (Anthropic API for the
+ * claude tier, host Ollama for the local tier) stall after the first chunk, so
+ * every iteration is an empty "Agent started → Agent stopped" turn. Attaching
+ * the inner container to an MTU-1400 network fixes both tiers (verified: a 10 MB
+ * download and a full claude turn both complete on MTU 1400 but stall at 1500/
+ * 65535). `host.docker.internal` still resolves on this network, so the local
+ * tier keeps reaching Ollama.
+ *
+ * Idempotent: creates the network only if missing. Best-effort — a failure here
+ * (e.g. it already exists with a different driver) is logged, not fatal; the run
+ * falls back to the default network. Accepts an exec shim for unit testing.
+ */
+export async function ensureSandboxNetwork(
+  name: string = SANDBOX_NETWORK,
+  mtu: string = SANDBOX_MTU,
+  exec: ShellExec = sh as ShellExec,
+): Promise<boolean> {
+  try {
+    await exec("docker", ["network", "inspect", name]);
+    return true; // already exists
+  } catch {
+    // not present — create it
+  }
+  try {
+    await exec("docker", [
+      "network", "create",
+      "--opt", `com.docker.network.driver.mtu=${mtu}`,
+      name,
+    ]);
+    console.log(`[afk] created sandbox network '${name}' (mtu ${mtu})`);
+    return true;
+  } catch (err) {
+    console.warn(
+      `[afk] could not create sandbox network '${name}' (continuing on default network):`,
+      err,
+    );
+    return false;
+  }
+}
+
 /**
  * Constant-time HMAC-SHA256 validation for GitHub webhook signatures.
  * `signature` is the raw X-Hub-Signature-256 header value (`sha256=<hex>`).
@@ -382,6 +431,11 @@ async function main(): Promise<void> {
   // crashed run.
   await sweepOrphanedSandboxes(sh as ShellExec, project);
 
+  // Ensure the MTU-corrected sandbox network exists so the agent's streaming
+  // responses don't stall on Docker Desktop's oversized default-bridge MTU (#48).
+  const networkReady = await ensureSandboxNetwork();
+  const network = networkReady ? SANDBOX_NETWORK : undefined;
+
   const issues = new IssueSource(repo);
   const tier = (process.env.AGENTIC_TIER ?? "claude") as "claude" | "local";
   const runner = new SandboxRunner({
@@ -391,6 +445,7 @@ async function main(): Promise<void> {
     localModel: process.env.AGENTIC_LOCAL_MODEL,
     localImageName: process.env.SANDCASTLE_OPENCODE_IMAGE,
     cwd: repoRoot,
+    network,
   });
 
   const inFlight: number[] = [];

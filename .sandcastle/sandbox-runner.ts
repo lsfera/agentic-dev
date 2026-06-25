@@ -65,6 +65,12 @@ export interface RunnerOptions {
   /** Host repo root; anchors sandcastle worktrees/.env. Should be the
    *  path-matched mount (process.cwd() of the orchestrator). */
   readonly cwd?: string;
+  /** Docker network to attach the inner sandbox to. Used to give the sandbox a
+   *  path-correct MTU (Docker's default bridge advertises MTU 65535 while the
+   *  Docker-Desktop path is ~1400, a PMTUD black hole that stalls the agent's
+   *  streaming API/Ollama responses after the first chunk → empty turns, #48).
+   *  The orchestrator creates an MTU-1400 network and passes it here. */
+  readonly network?: string;
   readonly maxIterations?: number;
   /** UID/GID baked into the inner image (Dockerfile ARG AGENT_UID/GID = 1000).
    *  Must match the image, NOT the host user — sandcastle otherwise defaults to
@@ -137,6 +143,7 @@ export class SandboxRunner {
         imageName: agentInput.imageName,
         containerUid: this.opts.containerUid ?? 1000,
         containerGid: this.opts.containerGid ?? 1000,
+        ...(this.opts.network ? { network: this.opts.network } : {}),
       }),
       branchStrategy: { type: "branch", branch },
       cwd: this.opts.cwd,
