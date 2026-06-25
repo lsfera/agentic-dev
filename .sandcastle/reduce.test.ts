@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent } from "./main.ts";
+import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
@@ -450,6 +450,48 @@ test("sweepOrphanedSandboxes: no project arg → sweeps every agentic sandbox (l
   assert.equal(count, 3, "unscoped sweep removes all agentic sandboxes regardless of project");
   const rm = calls.find((c) => c.args[0] === "rm")!;
   assert.ok(["a", "b", "c"].every((id) => rm.args.includes(id)));
+});
+
+// ─── Sandbox network / MTU (#48) ─────────────────────────────────────────────
+
+test("ensureSandboxNetwork: existing network → inspect only, no create", async () => {
+  const calls: Array<string[]> = [];
+  const exec = (_file: string, args: string[]) => {
+    calls.push(args);
+    return Promise.resolve({ stdout: "[]" }); // inspect succeeds
+  };
+  const ok = await ensureSandboxNetwork("net", "1400", exec);
+  assert.equal(ok, true);
+  assert.deepEqual(calls[0], ["network", "inspect", "net"]);
+  assert.ok(!calls.some((a) => a[1] === "create"), "must not create when the network exists");
+});
+
+test("ensureSandboxNetwork: missing network → creates it with the MTU opt", async () => {
+  const calls: Array<string[]> = [];
+  const exec = (_file: string, args: string[]) => {
+    calls.push(args);
+    if (args[1] === "inspect") return Promise.reject(new Error("No such network"));
+    return Promise.resolve({ stdout: "net" });
+  };
+  const ok = await ensureSandboxNetwork("net", "1400", exec);
+  assert.equal(ok, true);
+  const create = calls.find((a) => a[1] === "create");
+  assert.ok(create, "must create the network when missing");
+  assert.ok(create!.includes("--opt"), "must pass --opt");
+  assert.ok(
+    create!.includes("com.docker.network.driver.mtu=1400"),
+    "must set the MTU driver opt to the given value",
+  );
+  assert.ok(create!.includes("net"), "must create the named network");
+});
+
+test("ensureSandboxNetwork: create failure → returns false (best-effort, non-fatal)", async () => {
+  const exec = (_file: string, args: string[]) =>
+    args[1] === "inspect"
+      ? Promise.reject(new Error("missing"))
+      : Promise.reject(new Error("create failed"));
+  const ok = await ensureSandboxNetwork("net", "1400", exec as Parameters<typeof ensureSandboxNetwork>[2]);
+  assert.equal(ok, false);
 });
 
 // ─── Concurrency env-var ─────────────────────────────────────────────────────

@@ -77,6 +77,8 @@ resolved `AGENTIC_*` env without launching.
 - `AGENTIC_TIER` — agent tier: `claude` (default) or `local` (Ollama via opencode)
 - `AGENTIC_LOCAL_MODEL` — opencode model for the local tier (default: `ollama/qwen3-coder:30b`)
 - `SANDCASTLE_OPENCODE_IMAGE` — inner image for the local tier (default: `sandcastle-opencode:local`)
+- `AGENTIC_SANDBOX_NETWORK` — Docker network for inner sandboxes (default: `agentic-sandbox-net`), auto-created with a path-correct MTU so the agent's streaming responses don't stall (#48, ADR-0013)
+- `AGENTIC_SANDBOX_MTU` — MTU for that network (default: `1400`)
 
 ### Local tier prereqs
 
