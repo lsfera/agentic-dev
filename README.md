@@ -137,6 +137,41 @@ For `/exec` to land in *this* repo's container, the docker MCP server must run `
 
 Config, MCP registrations, and memory persist on the host at `~/.devcontainer-claude/`, surviving container rebuilds. `.env` reflects the **last** folder spun up (`init.sh` upserts the workspace paths on each `up.sh`).
 
+## Inner sandbox images
+
+Each implementation runs in a disposable inner container built from one of two
+images: the default **claude** image (`SANDCASTLE_IMAGE`, default `sandcastle:local`)
+and the **local/Ollama** image (`SANDCASTLE_OPENCODE_IMAGE`, default
+`sandcastle-opencode:local`). You can either pull prebuilt images or build them
+locally.
+
+**Pull prebuilt (no build step).** CI publishes both images, multi-arch
+(amd64 + arm64), to GHCR (ADR-0014). Point a project at them with env vars — the
+orchestrator already honours these overrides, so nothing else changes:
+
+```bash
+export SANDCASTLE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox:latest
+export SANDCASTLE_OPENCODE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox-opencode:latest
+```
+
+Set these in `.sandcastle/orchestrator.env` to make them stick. Use a version tag
+(e.g. `:v1.2.0`) instead of `:latest` for reproducible runs. The images are built
+by `.github/workflows/publish-images.yml` on version tags, on `main`, and via
+manual dispatch.
+
+**Build locally (the default).** The defaults stay `sandcastle:local` /
+`sandcastle-opencode:local` so source-of-truth and offline dev don't depend on a
+pull. Build them from the `.sandcastle` context:
+
+```bash
+docker build -f .sandcastle/Dockerfile          -t sandcastle:local          .sandcastle
+docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
+```
+
+A project that needs an **owned** image (so the #40 orphan sweep won't let another
+project reap its sandboxes) builds with `--build-arg AGENTIC_PROJECT=<name>`; the
+published GHCR images are unowned/legacy.
+
 ## Local model tier (Ollama)
 
 By default each implementation sandbox runs Claude (`claudeCode`). You can instead point the implementer at a **local Ollama model** via [opencode](https://opencode.ai) — no API cost, fully offline. Useful for cheap parallel work; quality depends on the local model, so it is not yet a drop-in for Claude on hard slices.
@@ -146,7 +181,10 @@ By default each implementation sandbox runs Claude (`claudeCode`). You can inste
 - Ollama running on the host, bound to `0.0.0.0:11434` so containers can reach it at `http://host.docker.internal:11434`.
 - A coding model pulled, e.g. `ollama pull qwen3-coder:30b`. Keep weights ~15–22 GB so RAM stays free for Docker + the sandbox stack.
 
-**One-time: build the opencode inner image**
+**One-time: get the opencode inner image**
+
+Pull the prebuilt `sandbox-opencode` image or build it locally — see
+[Inner sandbox images](#inner-sandbox-images). The local build is:
 
 ```bash
 docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle

@@ -1,0 +1,84 @@
+name: publish-images
+
+# Build and publish the inner sandbox images to GHCR so adopters can `docker pull`
+# instead of building them per-project (ADR-0014). The orchestrator already reads
+# SANDCASTLE_IMAGE / SANDCASTLE_OPENCODE_IMAGE, so pointing a project at these
+# refs needs no code change.
+#
+# Multi-arch (amd64 + arm64): adopters run these on Apple-Silicon Docker Desktop
+# as well as amd64 CI/hosts, so both platforms are published from one manifest.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    # Only rebuild when something that affects an inner image changes. The build
+    # context is .sandcastle, so scope the path filter to it.
+    paths:
+      - ".sandcastle/Dockerfile"
+      - ".sandcastle/Dockerfile.opencode"
+      - ".github/workflows/publish-images.yml"
+  workflow_dispatch:
+
+# Least privilege: read the repo, write packages (GHCR).
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Default (claude) tier image → SANDCASTLE_IMAGE.
+          - variant: sandbox
+            dockerfile: Dockerfile
+          # Local (opencode/Ollama) tier image → SANDCASTLE_OPENCODE_IMAGE.
+          - variant: sandbox-opencode
+            dockerfile: Dockerfile.opencode
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (cross-arch builds)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Nested package path groups both images under the repo:
+          # ghcr.io/<owner>/agentic-dev/<variant>
+          images: ghcr.io/${{ github.repository }}/${{ matrix.variant }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./.sandcastle
+          file: ./.sandcastle/${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # AGENTIC_PROJECT is intentionally empty: a published base image is
+          # "unowned" so the #40 project-scoped sweep treats it as legacy and any
+          # project may reap a crashed sandbox derived from it.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
