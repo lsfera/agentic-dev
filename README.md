@@ -214,8 +214,11 @@ services:
 ```
 
 or keep `build:` and add the published image as a cache source so `devcontainer up`
-is a registry cache hit rather than a full rebuild. The dogfood repo keeps `build:`
-as the source of truth, so local development still builds from the Dockerfile.
+is a registry cache hit rather than a full rebuild. **This repo dogfoods the
+published image** — its `docker-compose.yml` uses `image:` (with `build:` kept as a
+commented fallback); the workspace still carries `.sandcastle/*.ts`, so the
+orchestrator runs from the workspace source while the devcontainer itself comes
+from GHCR.
 
 The same [package-visibility](#inner-sandbox-images) note applies — pulling the
 `devcontainer` image anonymously needs it to be public, else `docker login ghcr.io`.
