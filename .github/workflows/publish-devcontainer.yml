@@ -1,0 +1,78 @@
+name: publish-devcontainer
+
+# Build and publish the OUTER orchestrator image — the devcontainer with its
+# features baked in — to GHCR, so adopters can skip the local devcontainer build
+# (ADR-0015).
+#
+# Unlike the inner sandbox images this is a *devcontainer*: base image + features
+# (claude-code, docker-outside-of-docker, node, github-cli) + Dockerfile. Features
+# are applied by the devcontainer CLI, NOT the Dockerfile, so a plain `docker
+# build` would produce a broken image — we build with `devcontainer build`.
+# Multi-arch (amd64 + arm64) because adopters run it on Apple-Silicon Docker
+# Desktop as well as amd64 hosts.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/publish-devcontainer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The arm64 leg builds under QEMU emulation (nvm + features + Claude CLI), so
+    # give it generous headroom.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (cross-arch builds)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/devcontainer
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Build and push (multi-arch)
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # metadata-action emits one tag per line; pass each as --image-name.
+          names=()
+          while IFS= read -r t; do
+            [ -n "$t" ] && names+=(--image-name "$t")
+          done <<< "$TAGS"
+          devcontainer build \
+            --workspace-folder . \
+            --config .devcontainer/devcontainer.json \
+            --platform linux/amd64,linux/arm64 \
+            --push true \
+            "${names[@]}"
