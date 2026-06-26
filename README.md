@@ -247,6 +247,13 @@ The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk l
 
 To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
 
+## Example configurations
+
+Concrete, copy-pasteable setups by use case live in [`examples/`](examples/) —
+standard Claude + prebuilt image, offline Ollama tier, build-from-source,
+version-pinned reproducible runs, and parallel/high-throughput. Each directory has
+the config files to copy into `.sandcastle/` plus a short README.
+
 ## Permissions
 
 Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.json` so `/exec` never prompts:
