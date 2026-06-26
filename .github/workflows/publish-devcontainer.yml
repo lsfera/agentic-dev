@@ -10,6 +10,11 @@ name: publish-devcontainer
 # build` would produce a broken image — we build with `devcontainer build`.
 # Multi-arch (amd64 + arm64) because adopters run it on Apple-Silicon Docker
 # Desktop as well as amd64 hosts.
+#
+# NOTE: built from devcontainer.build.json, a dockerfile-based config that mirrors
+# devcontainer.json's Dockerfile + features. The CLI rejects `--platform`/`--push`
+# for compose-based configs ("--platform or --push not supported"); the mounts in
+# the compose config are runtime-only and do not affect image content.
 
 on:
   push:
@@ -72,7 +77,7 @@ jobs:
           done <<< "$TAGS"
           devcontainer build \
             --workspace-folder . \
-            --config .devcontainer/devcontainer.json \
+            --config .devcontainer/devcontainer.build.json \
             --platform linux/amd64,linux/arm64 \
             --push true \
             "${names[@]}"
