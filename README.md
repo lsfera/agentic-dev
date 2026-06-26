@@ -150,15 +150,20 @@ locally.
 orchestrator already honours these overrides, so nothing else changes:
 
 ```bash
-export SANDCASTLE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox:v0.1.1
-export SANDCASTLE_OPENCODE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox-opencode:v0.1.1
+export SANDCASTLE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox:latest
+export SANDCASTLE_OPENCODE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox-opencode:latest
 ```
 
-Set these in `.sandcastle/orchestrator.env` to make them stick. **Pin a version
-tag** (as above) rather than `:latest` for reproducible runs — `:latest` floats
-to whatever last published. The images are built by
-`.github/workflows/publish-images.yml` on version tags (`v*`), on `main`, and via
-manual dispatch; each release publishes a matching `:vX.Y.Z` tag.
+Set these in `.sandcastle/orchestrator.env` to make them stick. `:latest` tracks
+the newest publish. The images are built by `.github/workflows/publish-images.yml`
+on version tags (`v*`), on `main`, and via manual dispatch; each release also
+publishes a matching `:vX.Y.Z` tag. To pin a release instead of floating
+`:latest`, resolve the current tag:
+
+```bash
+curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name'
+# → e.g. v0.1.3 ; then use ...sandbox:v0.1.3
+```
 
 **Build locally (the default).** The defaults stay `sandcastle:local` /
 `sandcastle-opencode:local` so source-of-truth and offline dev don't depend on a
@@ -188,7 +193,7 @@ To consume it instead of building locally, either point the compose service at i
 # .devcontainer/docker-compose.yml
 services:
   devcontainer:
-    image: ghcr.io/lsfera/agentic-dev/devcontainer:v0.1.1   # instead of build:
+    image: ghcr.io/lsfera/agentic-dev/devcontainer:latest   # instead of build:
 ```
 
 or keep `build:` and add the published image as a cache source so `devcontainer up`
@@ -241,6 +246,13 @@ The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk l
 | `SANDCASTLE_OPENCODE_IMAGE` | `sandcastle-opencode:local` | Inner image for the local tier. |
 
 To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
+
+## Example configurations
+
+Concrete, copy-pasteable setups by use case live in [`examples/`](examples/) —
+standard Claude + prebuilt image, offline Ollama tier, build-from-source,
+version-pinned reproducible runs, and parallel/high-throughput. Each directory has
+the config files to copy into `.sandcastle/` plus a short README.
 
 ## Permissions
 
