@@ -2,6 +2,7 @@
   "name": "agentic-orchestrator",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "description": "Sandcastle-based /afk orchestrator: works each ready-for-agent issue in its own disposable, git-isolated sandbox and opens a PR per issue.",
   "scripts": {
     "start": "tsx main.ts",
