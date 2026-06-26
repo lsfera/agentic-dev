@@ -6,6 +6,11 @@ services:
     # ALLOWED_CONTAINERS=devcontainer:<DEVCONTAINER_NAME>. Fallback keeps a bare
     # `docker compose up` working if .env hasn't been generated yet.
     container_name: ${DEVCONTAINER_NAME:-devcontainer}
+    # To skip the local devcontainer build, pull the prebuilt outer image instead
+    # (ADR-0015): comment out `build:` below and uncomment this. `:latest` tracks
+    # the newest publish; pin a release tag for reproducibility (resolve it with
+    # `curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name'`).
+    # image: ghcr.io/lsfera/agentic-dev/devcontainer:latest
     build:
       context: .
       dockerfile: Dockerfile
