@@ -10,7 +10,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtemp, mkdir, writeFile, symlink, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, symlink, chmod, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const sh = promisify(execFile);
@@ -88,7 +88,35 @@ test("afk: outside any project, exits non-zero", async () => {
   await assert.rejects(() =>
     sh("bash", [AFK, "--print-target"], {
       cwd: empty,
-      env: { ...process.env, LOCAL_WORKSPACE_FOLDER: "" },
+      env: { ...process.env, LOCAL_WORKSPACE_FOLDER: "", AGENTIC_ORCHESTRATOR_HOME: "/nonexistent" },
+    }),
+  );
+});
+
+test("afk: a non-vendoring project (.devcontainer only) falls back to the baked run.sh", async () => {
+  // Project root carries .devcontainer but no .sandcastle/run.sh (adopter using
+  // the baked orchestrator, ADR-0016).
+  const root = await mkdtemp(join(tmpdir(), "afk-baked-"));
+  await mkdir(join(root, ".devcontainer"), { recursive: true });
+  // A stand-in for /opt/agentic-orchestrator with an executable run.sh.
+  const baked = await mkdtemp(join(tmpdir(), "afk-opt-"));
+  const bakedRun = join(baked, "run.sh");
+  await writeFile(bakedRun, "#!/usr/bin/env bash\necho baked\n");
+  await chmod(bakedRun, 0o755);
+  const out = await printTarget(AFK, root, { AGENTIC_ORCHESTRATOR_HOME: baked });
+  // $PWD inside the script is canonicalized (macOS /var → /private/var), so
+  // compare against the realpath of the tmpdir.
+  assert.equal(out.ROOT, await realpath(root));
+  assert.equal(out.RUN_SH, bakedRun);
+});
+
+test("afk: project root found but neither workspace nor baked run.sh exists → error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "afk-norun-"));
+  await mkdir(join(root, ".devcontainer"), { recursive: true });
+  await assert.rejects(() =>
+    sh("bash", [AFK, "--print-target"], {
+      cwd: root,
+      env: { ...process.env, LOCAL_WORKSPACE_FOLDER: "", AGENTIC_ORCHESTRATOR_HOME: "/nonexistent" },
     }),
   );
 });

@@ -82,17 +82,48 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Run from the path-matched mount so sandcastle's worktrees resolve under
-# docker-outside-of-docker (ADR-0011) — not from /workspaces/<folder>.
+# docker-outside-of-docker (ADR-0011) — not from /workspaces/<folder>. This is the
+# orchestrator's cwd, so worktrees, .sandcastle/.env, and project identity all
+# resolve against the TARGET project regardless of where the code itself lives.
 cd "${LOCAL_WORKSPACE_FOLDER:-$REPO_ROOT}"
 
-( cd .sandcastle && npm install )
+# Resolve the orchestrator CODE directory (ADR-0016). Prefer the workspace copy
+# when it carries the source — the dogfood repo, or an adopter who vendors
+# .sandcastle/ — so local edits take effect; otherwise fall back to the
+# orchestrator baked into the devcontainer image, letting adopters run without
+# vendoring the *.ts at all. Either way config (orchestrator.env / .env /
+# opencode.json) comes from the project's .sandcastle/, never from the baked copy.
+ORCH_HOME="${AGENTIC_ORCHESTRATOR_HOME:-/opt/agentic-orchestrator}"
+if [ -f "$PWD/.sandcastle/main.ts" ]; then
+  ORCH_DIR="$PWD/.sandcastle"
+elif [ -f "$ORCH_HOME/main.ts" ]; then
+  ORCH_DIR="$ORCH_HOME"
+else
+  echo "run.sh: no orchestrator found — expected .sandcastle/main.ts in the project or a baked $ORCH_HOME" >&2
+  exit 1
+fi
+
+# Install deps only when missing or stale — not on every run. npm writes
+# node_modules/.package-lock.json, so -nt against package-lock.json detects a
+# changed lockfile. This covers both the workspace copy and the baked copy: the
+# image ships only the orchestrator *source* (node not yet present when the
+# Dockerfile runs — it arrives via a devcontainer feature), so the baked copy
+# installs its deps on first use, once per container.
+if [ ! -x "$ORCH_DIR/node_modules/.bin/tsx" ] ||
+   [ "$ORCH_DIR/package-lock.json" -nt "$ORCH_DIR/node_modules/.package-lock.json" ]; then
+  ( cd "$ORCH_DIR" && npm install )
+fi
 
 # Source GH_TOKEN for the orchestrator's own gh calls; kept out of the sandboxes.
-set -a
-# shellcheck disable=SC1091
-. .sandcastle/orchestrator.env
-set +a
+if [ -f .sandcastle/orchestrator.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . .sandcastle/orchestrator.env
+  set +a
+else
+  echo "run.sh: warning — no .sandcastle/orchestrator.env (GH_TOKEN); gh calls may fail" >&2
+fi
 
 resolve_overrides  # arguments override anything orchestrator.env set
 
-exec ./.sandcastle/node_modules/.bin/tsx .sandcastle/main.ts
+exec "$ORCH_DIR/node_modules/.bin/tsx" "$ORCH_DIR/main.ts"

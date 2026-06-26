@@ -29,15 +29,18 @@ esac
 print_only=0
 [ "${1:-}" = "--print-target" ] && { print_only=1; shift; }
 
-# Project root: nearest ancestor of $PWD that holds .sandcastle/run.sh.
+# Project root: nearest ancestor of $PWD that looks like a project — it vendors
+# the orchestrator (.sandcastle/run.sh) or is a devcontainer project (.devcontainer/).
+# The latter lets an adopter who DOESN'T vendor .sandcastle/ (running the baked
+# orchestrator, ADR-0016) still be located.
 root="" d="$PWD"
 while :; do
-  if [ -x "$d/.sandcastle/run.sh" ]; then root="$d"; break; fi
+  if [ -x "$d/.sandcastle/run.sh" ] || [ -d "$d/.devcontainer" ]; then root="$d"; break; fi
   [ "$d" = "/" ] && break
   d="$(dirname "$d")"
 done
 if [ -z "$root" ]; then
-  echo "$mode: no .sandcastle/run.sh found in $PWD or any parent — run this inside a project." >&2
+  echo "$mode: no project found above $PWD (looked for .sandcastle/run.sh or .devcontainer/)." >&2
   exit 1
 fi
 
@@ -49,11 +52,21 @@ if [ -z "${LOCAL_WORKSPACE_FOLDER:-}" ] && [ -f "$root/.devcontainer/.env" ]; th
   [ -n "$lwf" ] && export LOCAL_WORKSPACE_FOLDER="$lwf"
 fi
 
-# Prefer the run.sh under the path-matched mount when we know it (it re-cds there
-# regardless, but this keeps a relative invocation resolving the right tree).
-run_sh="$root/.sandcastle/run.sh"
-if [ -n "${LOCAL_WORKSPACE_FOLDER:-}" ] && [ -x "$LOCAL_WORKSPACE_FOLDER/.sandcastle/run.sh" ]; then
-  run_sh="$LOCAL_WORKSPACE_FOLDER/.sandcastle/run.sh"
+# Resolve run.sh. Prefer the workspace copy (dogfood / vendored adopters); under
+# the path-matched mount when known (run.sh re-cds there regardless, but this
+# keeps a relative invocation resolving the right tree). Fall back to the run.sh
+# inside the baked orchestrator (ADR-0016) for adopters who don't vendor it.
+orch_home="${AGENTIC_ORCHESTRATOR_HOME:-/opt/agentic-orchestrator}"
+if [ -x "$root/.sandcastle/run.sh" ]; then
+  run_sh="$root/.sandcastle/run.sh"
+  if [ -n "${LOCAL_WORKSPACE_FOLDER:-}" ] && [ -x "$LOCAL_WORKSPACE_FOLDER/.sandcastle/run.sh" ]; then
+    run_sh="$LOCAL_WORKSPACE_FOLDER/.sandcastle/run.sh"
+  fi
+elif [ -x "$orch_home/run.sh" ]; then
+  run_sh="$orch_home/run.sh"
+else
+  echo "$mode: no run.sh — expected $root/.sandcastle/run.sh or a baked $orch_home/run.sh" >&2
+  exit 1
 fi
 
 if [ "$print_only" = "1" ]; then
