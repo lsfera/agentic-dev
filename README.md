@@ -1,8 +1,6 @@
-# agentic.dev
+# agentic-dev
 
 A reusable devcontainer that runs an agentic development workflow inside a Docker sandbox. Claude drives the feature lifecycle from requirements to implementation; all shell execution is isolated in the container. **Each project is self-contained** — it carries its own `.devcontainer/`, so `devcontainer up` and VS Code *Reopen in Container* discover it natively, the container is named per project, and two projects can run side by side.
-
-> The repo and its published images use the namespace **`agentic-dev`** (`ghcr.io/lsfera/agentic-dev/...`); the local checkout directory is `agentic.dev`. Same project, just dot vs dash.
 
 ## TL;DR
 

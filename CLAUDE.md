@@ -1,4 +1,4 @@
-# agentic.dev
+# agentic-dev
 
 A reusable devcontainer + agentic workflow. Claude runs on the **host** and drives a
 disposable Docker sandbox; GitHub issues hold the durable state. See `README.md` for the
