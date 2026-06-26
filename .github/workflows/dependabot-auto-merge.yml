@@ -1,10 +1,10 @@
 name: dependabot-auto-merge
 
-# Auto-merge green @ai-hero/sandcastle bumps on the sandcastle-upgrades branch.
-# Enables GitHub's native auto-merge for PATCH and MINOR bumps; MAJOR bumps are
-# left for manual review (an API change deserves eyes). Auto-merge waits for the
-# required `sandcastle` check (branch protection on sandcastle-upgrades), so a bump
-# only lands once CI is green.
+# Auto-merge green @ai-hero/sandcastle bumps into main. Enables GitHub's native
+# auto-merge for PATCH and MINOR bumps; MAJOR bumps are left for manual review
+# (an API change deserves eyes). Auto-merge waits for the required `sandcastle`
+# check (branch protection on main), so a bump only lands once CI is green.
+# Dependabot opens each bump as its own ephemeral branch off main, deleted on merge.
 #
 # pull_request_target runs in the base-branch context with a write token (Dependabot
 # PRs otherwise get a read-only token). Safe here: we never check out or execute the
