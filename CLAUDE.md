@@ -42,6 +42,12 @@ launchers over `.sandcastle/run.sh`) — run `afk [tier] [model] [flags]` or
 path-matched mount (ADR-0011) regardless of cwd. `afk --dry-run` prints the
 resolved env without launching.
 
+The **published** image additionally bakes the workflow slash commands → `~/.claude/commands`
+and four upstream engineering disciplines → `~/.claude/skills` (ADR-0017), and
+`.devcontainer/docker-compose.yml` boots standalone without `init.sh` (every var has a
+fallback). Both are groundwork for running the workflow from *inside* the container; this
+repo still drives it from the host via `/exec`, using the workspace `.claude/commands`.
+
 ### Issue lifecycle
 
 - `to-issues` creates issues as vertical slices and applies `ready-for-agent` to unblocked ones.
