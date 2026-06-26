@@ -2,17 +2,21 @@
 
 A reusable devcontainer that runs an agentic development workflow inside a Docker sandbox. Claude drives the feature lifecycle from requirements to implementation; all shell execution is isolated in the container. **Each project is self-contained** — it carries its own `.devcontainer/`, so `devcontainer up` and VS Code *Reopen in Container* discover it natively, the container is named per project, and two projects can run side by side.
 
+> The repo and its published images use the namespace **`agentic-dev`** (`ghcr.io/lsfera/agentic-dev/...`); the local checkout directory is `agentic.dev`. Same project, just dot vs dash.
+
 ## TL;DR
 
 ```bash
 ./up.sh .                      # spin up THIS project's sandbox (init.sh runs automatically)
                                # …drive the workflow with Claude (see "The workflow")…
-./down.sh .                    # tear the sandbox down when done
+./down.sh                      # tear down sandboxes started from this repo when done
 ```
 
 `./up.sh <folder>` works for any folder that holds its own `.devcontainer/`; the dogfood case is this repo itself (`./up.sh .`). VS Code users can skip `up.sh` entirely and use *Reopen in Container*.
 
 You do **not** need VS Code — the workflow is headless (see [Do I need VS Code?](#do-i-need-vs-code)).
+
+Don't want to build the images locally? Pull the prebuilt ones from GHCR instead — see [Inner sandbox images](#inner-sandbox-images) and the ready-made setups in [`examples/`](examples/).
 
 ## How it fits together
 
@@ -69,9 +73,9 @@ Attaching VS Code to an already-running container is fine and does not disturb t
 End to end, from a clean checkout to merged work:
 
 1. **One-time setup**
-   - `bash .devcontainer/init.sh` — generates `.devcontainer/.env`.
    - Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.json` (see [Permissions](#permissions)).
    - Make sure the docker MCP server targets this repo's compose project (see [Sandbox wiring](#sandbox-wiring)).
+   - (`.devcontainer/.env` is generated automatically — `up.sh` / `devcontainer up` run `init.sh` as `initializeCommand`.)
 2. **Create a project folder** under this repo, e.g. `mkdir cv`.
 3. **Spin up the sandbox:** `./up.sh cv`.
 4. **`/grill-me-with-docs`** — Claude interviews you and reads any docs you point at, producing `docs/grill-output.md`.
@@ -165,6 +169,11 @@ curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].t
 # → e.g. v0.1.3 ; then use ...sandbox:v0.1.3
 ```
 
+> **Package visibility.** The published packages (`sandbox`, `sandbox-opencode`,
+> and `devcontainer`) must be **public** to pull anonymously. If they're private,
+> run `docker login ghcr.io` on the host first (with a token that has
+> `read:packages`), or make them public in the repo's *Packages* settings.
+
 **Build locally (the default).** The defaults stay `sandcastle:local` /
 `sandcastle-opencode:local` so source-of-truth and offline dev don't depend on a
 pull. Build them from the `.sandcastle` context:
@@ -199,6 +208,9 @@ services:
 or keep `build:` and add the published image as a cache source so `devcontainer up`
 is a registry cache hit rather than a full rebuild. The dogfood repo keeps `build:`
 as the source of truth, so local development still builds from the Dockerfile.
+
+The same [package-visibility](#inner-sandbox-images) note applies — pulling the
+`devcontainer` image anonymously needs it to be public, else `docker login ghcr.io`.
 
 ## Local model tier (Ollama)
 
