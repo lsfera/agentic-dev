@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# afk / hitl — ergonomic entry point for the sandcastle orchestrator, baked into
+# the devcontainer image so you can type `afk [tier] [model] [flags…]` (or
+# `hitl …`) from anywhere inside a project instead of `.sandcastle/run.sh afk …`.
+#
+# It encapsulates the reliable in-container launch recipe:
+#   1. find the project root (nearest ancestor holding .sandcastle/run.sh),
+#   2. ensure LOCAL_WORKSPACE_FOLDER points at the path-matched host mount
+#      (ADR-0011) by reading it from .devcontainer/.env when it isn't already in
+#      the environment — without it run.sh would launch from /workspaces/<folder>
+#      and docker-outside-of-docker rejects the inner-sandbox mount,
+#   3. exec the project's run.sh with the mode.
+#
+# The mode is taken from the invoked name, so the `hitl` symlink runs in review
+# mode and `afk` runs autonomously. All other arguments pass straight through to
+# run.sh (tier, model, --base, --concurrency, --dry-run, …).
+#
+#   --print-target   print the resolved mode/root/LOCAL_WORKSPACE_FOLDER/run.sh
+#                    and exit without launching — used by the tests.
+set -euo pipefail
+
+mode="$(basename "$0")"
+case "$mode" in
+  afk|hitl) ;;
+  *) echo "$mode: must be invoked as 'afk' or 'hitl'" >&2; exit 2 ;;
+esac
+
+print_only=0
+[ "${1:-}" = "--print-target" ] && { print_only=1; shift; }
+
+# Project root: nearest ancestor of $PWD that holds .sandcastle/run.sh.
+root="" d="$PWD"
+while :; do
+  if [ -x "$d/.sandcastle/run.sh" ]; then root="$d"; break; fi
+  [ "$d" = "/" ] && break
+  d="$(dirname "$d")"
+done
+if [ -z "$root" ]; then
+  echo "$mode: no .sandcastle/run.sh found in $PWD or any parent — run this inside a project." >&2
+  exit 1
+fi
+
+# Path-match (ADR-0011): the orchestrator must run from the host path, not
+# /workspaces/<folder>. run.sh cds to LOCAL_WORKSPACE_FOLDER, so make sure it is
+# set; init.sh writes it into .devcontainer/.env.
+if [ -z "${LOCAL_WORKSPACE_FOLDER:-}" ] && [ -f "$root/.devcontainer/.env" ]; then
+  lwf="$(grep -E '^LOCAL_WORKSPACE_FOLDER=' "$root/.devcontainer/.env" | tail -1 | cut -d= -f2-)"
+  [ -n "$lwf" ] && export LOCAL_WORKSPACE_FOLDER="$lwf"
+fi
+
+# Prefer the run.sh under the path-matched mount when we know it (it re-cds there
+# regardless, but this keeps a relative invocation resolving the right tree).
+run_sh="$root/.sandcastle/run.sh"
+if [ -n "${LOCAL_WORKSPACE_FOLDER:-}" ] && [ -x "$LOCAL_WORKSPACE_FOLDER/.sandcastle/run.sh" ]; then
+  run_sh="$LOCAL_WORKSPACE_FOLDER/.sandcastle/run.sh"
+fi
+
+if [ "$print_only" = "1" ]; then
+  printf 'MODE=%s\n' "$mode"
+  printf 'ROOT=%s\n' "$root"
+  printf 'LOCAL_WORKSPACE_FOLDER=%s\n' "${LOCAL_WORKSPACE_FOLDER:-}"
+  printf 'RUN_SH=%s\n' "$run_sh"
+  exit 0
+fi
+
+exec "$run_sh" "$mode" "$@"

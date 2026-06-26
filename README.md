@@ -194,15 +194,22 @@ This image ships the `opencode` CLI (pinned `opencode-ai@1.17.9`) instead of Cla
 
 **Run the orchestrator on the local tier**
 
-`.sandcastle/run.sh` steers the tier and model from arguments — it handles the `cd` to the path-matched mount, `npm install`, and `orchestrator.env` sourcing for you:
+The devcontainer image bakes in `afk` and `hitl` commands, so from anywhere inside a project you can just:
 
 ```bash
-.sandcastle/run.sh afk local                    # default local model
-.sandcastle/run.sh afk local qwen2.5-coder:32b  # pick a model
-.sandcastle/run.sh hitl local                   # review before merge
+afk                          # autonomous, claude tier
+afk local                    # default local model
+afk local qwen2.5-coder:32b  # pick a model
+hitl local                   # review before merge
 ```
 
-The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk local qwen2.5-coder:32b`). A bare model name is routed to the active tier and gets the `ollama/` prefix added if missing. Under the hood the arguments resolve to these env vars (arguments override `orchestrator.env`); `run.sh afk … --dry-run` prints the resolved values without launching:
+`afk`/`hitl` are thin launchers over `.sandcastle/run.sh` (which steers tier/model from arguments and handles the `cd` to the path-matched mount, `npm install`, and `orchestrator.env` sourcing). They resolve the project root and set `LOCAL_WORKSPACE_FOLDER` from `.devcontainer/.env` so the run launches from the host-path mount (ADR-0011) regardless of your working directory. The underlying script is equivalent:
+
+```bash
+.sandcastle/run.sh afk local qwen2.5-coder:32b
+```
+
+The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk local qwen2.5-coder:32b`). A bare model name is routed to the active tier and gets the `ollama/` prefix added if missing. Under the hood the arguments resolve to these env vars (arguments override `orchestrator.env`); `afk … --dry-run` prints the resolved values without launching:
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
