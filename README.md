@@ -150,14 +150,15 @@ locally.
 orchestrator already honours these overrides, so nothing else changes:
 
 ```bash
-export SANDCASTLE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox:latest
-export SANDCASTLE_OPENCODE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox-opencode:latest
+export SANDCASTLE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox:v0.1.1
+export SANDCASTLE_OPENCODE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox-opencode:v0.1.1
 ```
 
-Set these in `.sandcastle/orchestrator.env` to make them stick. Use a version tag
-(e.g. `:v1.2.0`) instead of `:latest` for reproducible runs. The images are built
-by `.github/workflows/publish-images.yml` on version tags, on `main`, and via
-manual dispatch.
+Set these in `.sandcastle/orchestrator.env` to make them stick. **Pin a version
+tag** (as above) rather than `:latest` for reproducible runs — `:latest` floats
+to whatever last published. The images are built by
+`.github/workflows/publish-images.yml` on version tags (`v*`), on `main`, and via
+manual dispatch; each release publishes a matching `:vX.Y.Z` tag.
 
 **Build locally (the default).** The defaults stay `sandcastle:local` /
 `sandcastle-opencode:local` so source-of-truth and offline dev don't depend on a
@@ -171,6 +172,28 @@ docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sa
 A project that needs an **owned** image (so the #40 orphan sweep won't let another
 project reap its sandboxes) builds with `--build-arg AGENTIC_PROJECT=<name>`; the
 published GHCR images are unowned/legacy.
+
+## Outer orchestrator image
+
+The **outer** image — the devcontainer the orchestrator runs in — is also
+published to GHCR, multi-arch, as `ghcr.io/lsfera/agentic-dev/devcontainer`
+(ADR-0015), so adopters can skip the local devcontainer build (~2.3 GB, four
+features). It is a *devcontainer* (base + features + Dockerfile), so it is built
+with the devcontainer CLI, not a plain `docker build`; the workflow is
+`.github/workflows/publish-devcontainer.yml`.
+
+To consume it instead of building locally, either point the compose service at it
+
+```yaml
+# .devcontainer/docker-compose.yml
+services:
+  devcontainer:
+    image: ghcr.io/lsfera/agentic-dev/devcontainer:v0.1.1   # instead of build:
+```
+
+or keep `build:` and add the published image as a cache source so `devcontainer up`
+is a registry cache hit rather than a full rebuild. The dogfood repo keeps `build:`
+as the source of truth, so local development still builds from the Dockerfile.
 
 ## Local model tier (Ollama)
 
