@@ -284,6 +284,10 @@ Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.js
 - **Per-project, self-contained.** Each project carries its own `.devcontainer/`, so `up.sh`, `devcontainer up`, and VS Code *Reopen in Container* all discover the config natively (no `--config` split, no `AGENTIC_DC_INIT`). The container is named per project (`DEVCONTAINER_NAME`, derived from the workspace folder), so two projects don't collide. **Tradeoff:** each project keeps its own copy of `.devcontainer/`, so improvements to the shared config must be propagated to each project (e.g. by re-copying or templating) rather than landing everywhere at once. See [ADR-0012](docs/adr/0012-self-contained-per-project-devcontainer.md).
 - **The docker MCP map is per-project.** `/exec` targets the sandbox via `ALLOWED_CONTAINERS=devcontainer:<DEVCONTAINER_NAME>`; for this repo that's `agentic-dev`. Point it at the project's container name (no longer the old fixed `agentic-sandbox`).
 
+## License
+
+[MIT](LICENSE) © 2026 Luca Giordano.
+
 ## Credits
 
 The orchestrator under `.sandcastle/` is built on **[sandcastle](https://github.com/mattpocock/sandcastle)** by [Matt Pocock](https://github.com/mattpocock) — a TypeScript library for orchestrating sandboxed coding agents (`sandcastle.run()`, published as [`@ai-hero/sandcastle`](https://www.npmjs.com/package/@ai-hero/sandcastle)). It handles the disposable, git-isolated Docker sandbox each agent runs in; this project wraps it into the issue-driven `/afk` and `/hitl` workflow. Thanks to Matt and the sandcastle contributors.
