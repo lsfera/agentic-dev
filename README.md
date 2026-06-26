@@ -196,6 +196,15 @@ features). It is a *devcontainer* (base + features + Dockerfile), so it is built
 with the devcontainer CLI, not a plain `docker build`; the workflow is
 `.github/workflows/publish-devcontainer.yml`.
 
+The published image also **bakes the orchestrator source** into
+`/opt/agentic-orchestrator` (ADR-0016), so an adopter using it doesn't need to
+vendor `.sandcastle/*.ts` at all — keep only your **config** in `.sandcastle/`
+(`orchestrator.env`, `.env`, `opencode.json`) and run `afk`/`hitl`. The launchers
+prefer a workspace `.sandcastle/` when it carries the source (so this repo and any
+vendoring project still run their own copy) and fall back to the baked one
+otherwise; deps install into `/opt` on first use. Override the baked location with
+`AGENTIC_ORCHESTRATOR_HOME`.
+
 To consume it instead of building locally, either point the compose service at it
 
 ```yaml

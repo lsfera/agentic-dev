@@ -3,7 +3,13 @@
 
   "//": "Build-ONLY devcontainer config for publishing the outer orchestrator image to GHCR (ADR-0015). The runtime config is devcontainer.json (docker-compose, for the workspace/SSH/persist/socket mounts and path-match). The devcontainer CLI does NOT support `--platform`/`--push` for compose-based configs, so the publishable multi-arch image is built from this dockerfile-based config instead. It must mirror devcontainer.json's `build.dockerfile` + `features` exactly (the mounts/initializeCommand are runtime-only and do not affect image content). Keep the feature list in sync with devcontainer.json.",
 
-  "build": { "dockerfile": "Dockerfile" },
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "BAKE_ORCHESTRATOR": "1",
+      "AGENTIC_REF": "${localEnv:AGENTIC_REF}"
+    }
+  },
 
   "features": {
     "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
