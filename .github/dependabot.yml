@@ -1,0 +1,27 @@
+version: 2
+
+# Track upgradability of the core dependency, @ai-hero/sandcastle, without
+# touching main: Dependabot opens its bump PRs against the dedicated
+# `sandcastle-upgrades` branch (target-branch), where CI runs the orchestrator's
+# typecheck + tests (see .github/workflows/ci.yml, which also triggers on that
+# branch). Merge `sandcastle-upgrades` into main once an upgrade is green.
+#
+# NOTE: the `sandcastle-upgrades` branch must exist — Dependabot targets it but
+# does not create it. Keep it fresh by periodically merging main into it (or
+# re-cutting it) so upgrades are tested against current code.
+updates:
+  - package-ecosystem: "npm"
+    directory: "/.sandcastle" # where package.json / package-lock.json live
+    schedule:
+      interval: "weekly"
+    target-branch: "sandcastle-upgrades"
+    # Only this dependency — we're tracking sandcastle's upgradability, not a
+    # general dependency sweep.
+    allow:
+      - dependency-name: "@ai-hero/sandcastle"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "sandcastle-upgrade"

@@ -2,9 +2,12 @@ name: ci
 
 on:
   pull_request:
-    branches: [main]
+    # `sandcastle-upgrades` is the dedicated branch Dependabot opens
+    # @ai-hero/sandcastle bump PRs against (see .github/dependabot.yml), so its
+    # PRs run the typecheck + tests here.
+    branches: [main, sandcastle-upgrades]
   push:
-    branches: [main]
+    branches: [main, sandcastle-upgrades]
 
 jobs:
   sandcastle:
