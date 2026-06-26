@@ -5,6 +5,11 @@ services:
     # at once without colliding. The docker MCP server targets it via
     # ALLOWED_CONTAINERS=devcontainer:<DEVCONTAINER_NAME>. Fallback keeps a bare
     # `docker compose up` working if .env hasn't been generated yet.
+    #
+    # init.sh is OPTIONAL: every var below carries a fallback, so this file boots
+    # standalone with a bare `docker compose up` from a project dir — no .env, no
+    # init.sh. ${PWD} is the dir Compose runs from (keeps the ADR-0011 path match);
+    # ${HOME} is the host home. When init.sh / VS Code set these vars, they win.
     container_name: ${DEVCONTAINER_NAME:-devcontainer}
     # Dogfooding from the published image (ADR-0015/0016): the dogfood runs from the
     # prebuilt outer image, not a local build. The workspace still carries
@@ -24,8 +29,8 @@ services:
       # consistency: cached = host is authoritative, container reads may briefly lag.
       # (No-op on modern Docker Desktop/VirtioFS, but correct intent + helps on osxfs.)
       - type: bind
-        source: ${LOCAL_WORKSPACE_FOLDER}
-        target: ${WORKSPACE_FOLDER}
+        source: ${LOCAL_WORKSPACE_FOLDER:-${PWD}}
+        target: ${WORKSPACE_FOLDER:-/workspace}
         consistency: cached
 
       # Path-matched mirror of the SAME project dir at its real host path (ADR-0011).
@@ -35,14 +40,14 @@ services:
       # path not known to the host daemon). Humans/editor keep using ${WORKSPACE_FOLDER};
       # only the orchestrator cds here. Harmless extra mount for non-sandcastle projects.
       - type: bind
-        source: ${LOCAL_WORKSPACE_FOLDER}
-        target: ${LOCAL_WORKSPACE_FOLDER}
+        source: ${LOCAL_WORKSPACE_FOLDER:-${PWD}}
+        target: ${LOCAL_WORKSPACE_FOLDER:-${PWD}}
         consistency: cached
 
       # SSH keys — read-only for private git access.
       # System-wide known_hosts are baked into the MS base image.
       - type: bind
-        source: ${SSH_DIR}
+        source: ${SSH_DIR:-${HOME}/.ssh}
         target: /home/vscode/.ssh
         read_only: true
         bind:
@@ -50,7 +55,7 @@ services:
 
       # Claude Code config, MCP registrations, memory — shared across rebuilds.
       - type: bind
-        source: ${CLAUDE_PERSIST_HOST_DIR}
+        source: ${CLAUDE_PERSIST_HOST_DIR:-${HOME}/.devcontainer-claude}
         target: /home/vscode/.claude-persist
         bind:
           create_host_path: true
@@ -62,7 +67,7 @@ services:
         source: ${DOCKER_SOCK:-/var/run/docker.sock}
         target: /var/run/docker.sock
 
-    working_dir: ${WORKSPACE_FOLDER}
+    working_dir: ${WORKSPACE_FOLDER:-/workspace}
     command: sleep infinity
 
 networks:

@@ -302,3 +302,5 @@ Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.js
 ## Credits
 
 The orchestrator under `.sandcastle/` is built on **[sandcastle](https://github.com/mattpocock/sandcastle)** by [Matt Pocock](https://github.com/mattpocock) — a TypeScript library for orchestrating sandboxed coding agents (`sandcastle.run()`, published as [`@ai-hero/sandcastle`](https://www.npmjs.com/package/@ai-hero/sandcastle)). It handles the disposable, git-isolated Docker sandbox each agent runs in; this project wraps it into the issue-driven `/afk` and `/hitl` workflow. Thanks to Matt and the sandcastle contributors.
+
+The published image also bakes a few model-invoked engineering disciplines — `tdd`, `diagnosing-bugs`, `domain-modeling`, `codebase-design` — from **[mattpocock/skills](https://github.com/mattpocock/skills)** (MIT, © Matt Pocock), installed into `~/.claude/skills`. The user-invoked workflow commands (`/afk`, `/hitl`, `/to-prd`, …) are this project's own.

@@ -37,3 +37,34 @@ fi
 [ -L "${HOME}/.claude" ] || ln -sf "${PERSIST_DATA}" "${HOME}/.claude"
 
 echo "Claude Code data redirected → ${PERSIST_DIR}"
+
+# Install the agentic-dev workflow slash commands. They are baked into the image
+# at /opt/agentic-commands (ADR-0016) — outside ~/.claude, which the symlink above
+# would otherwise shadow. Copy them into the persisted ~/.claude/commands so the
+# in-container `claude` CLI exposes /grill-me-with-docs, /to-prd, /to-issues, /afk,
+# /hitl, /tdd and /exec in any project, not just one carrying its own .claude/.
+# Refreshed on every create so a newer image wins (overwrites same-named commands).
+BAKED_COMMANDS="/opt/agentic-commands"
+if [ -d "$BAKED_COMMANDS" ]; then
+  mkdir -p "${PERSIST_DATA}/commands"
+  cp -f "$BAKED_COMMANDS"/*.md "${PERSIST_DATA}/commands/" 2>/dev/null || true
+  echo "Installed agentic-dev workflow commands → ~/.claude/commands"
+fi
+
+# Install the upstream model-invoked engineering disciplines (tdd, diagnosing-bugs,
+# domain-modeling, codebase-design) baked from mattpocock/skills (MIT) at
+# /opt/agentic-skills. These are the un-forked disciplines the workflow leans on;
+# the user-invoked commands above are the project's own. Skills live in a separate
+# ~/.claude/skills namespace, so they don't collide with the slash commands. Only
+# subdirectories are copied — the baked LICENSE stays at /opt. Refreshed each create.
+BAKED_SKILLS="/opt/agentic-skills"
+if [ -d "$BAKED_SKILLS" ]; then
+  mkdir -p "${PERSIST_DATA}/skills"
+  for d in "$BAKED_SKILLS"/*/; do
+    [ -d "$d" ] || continue            # no skills baked → skip (the */ stayed literal)
+    name="$(basename "$d")"
+    rm -rf "${PERSIST_DATA}/skills/${name}"   # clean overwrite, no nested re-copy on refresh
+    cp -a "${BAKED_SKILLS}/${name}" "${PERSIST_DATA}/skills/"
+  done
+  echo "Installed upstream engineering-discipline skills → ~/.claude/skills"
+fi
