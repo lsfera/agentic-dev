@@ -35,6 +35,13 @@ full picture — this file is the operating contract.
 ./down.sh <folder>    →  tear down when done
 ```
 
+Inside the devcontainer the image bakes in `afk` / `hitl` shell commands (thin
+launchers over `.sandcastle/run.sh`) — run `afk [tier] [model] [flags]` or
+`hitl …` from anywhere in a project. They resolve the project root and set
+`LOCAL_WORKSPACE_FOLDER` from `.devcontainer/.env` so the run honours the
+path-matched mount (ADR-0011) regardless of cwd. `afk --dry-run` prints the
+resolved env without launching.
+
 ### Issue lifecycle
 
 - `to-issues` creates issues as vertical slices and applies `ready-for-agent` to unblocked ones.
