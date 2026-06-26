@@ -14,9 +14,9 @@ COPY afk /usr/local/bin/afk
 RUN chmod +x /usr/local/bin/claude-persist-setup /usr/local/bin/afk \
   && ln -sf afk /usr/local/bin/hitl
 
-# Optionally bake the orchestrator SOURCE + workflow slash commands + upstream
-# engineering-discipline skills into the image so adopters can run without vendoring
-# .sandcastle/*.ts or .claude/commands/*.md (ADR-0016). Gated by build-arg, so the
+# Optionally bake the orchestrator SOURCE (ADR-0016) + workflow slash commands +
+# upstream engineering-discipline skills (ADR-0017) into the image so adopters can run
+# without vendoring .sandcastle/*.ts or .claude/commands/*.md. Gated by build-arg, so the
 # compose/runtime build (the dogfood) stays lean and keeps using the workspace copy.
 # We clone the COMMITTED code (not COPY the build context) so gitignored secrets
 # (.sandcastle/.env, orchestrator.env) can never reach this public image — and so files
@@ -30,7 +30,7 @@ RUN chmod +x /usr/local/bin/claude-persist-setup /usr/local/bin/afk \
 ARG BAKE_ORCHESTRATOR=""
 ARG AGENTIC_REF="main"
 ARG AGENTIC_REPO_URL="https://github.com/lsfera/agentic-dev"
-# Upstream model-invoked engineering disciplines, baked from mattpocock/skills
+# Upstream model-invoked engineering disciplines (ADR-0017), baked from mattpocock/skills
 # (MIT, © Matt Pocock — LICENSE preserved at /opt/agentic-skills). The repo's
 # *user-invoked* workflow commands (/afk, /hitl, /exec, /to-prd, /to-issues, /tdd,
 # /grill-me-with-docs) are the project's own — they are coupled to the sandcastle

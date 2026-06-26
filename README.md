@@ -119,11 +119,11 @@ Supporting commands:
 | `down.sh` | Tear down sandboxes from this repo, scoped by label (`./down.sh [folder]`). |
 | `code.sh` | Optional: attach VS Code to a running sandbox at its workspace folder. |
 | `.devcontainer/init.sh` | Host `initializeCommand`: derives the per-project `DEVCONTAINER_NAME` and writes `.devcontainer/.env`. `--dry-run` prints the resolved names without side effects. |
-| `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup`. |
-| `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), SSH (ro), Claude persist dir, Docker socket. |
+| `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup` and the `afk`/`hitl` launchers. When built for publishing (`BAKE_ORCHESTRATOR=1`) it also bakes the orchestrator source + workflow commands + upstream skills (ADR-0016/0017). |
+| `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), SSH (ro), Claude persist dir, Docker socket. Every var has a fallback, so it boots standalone without `init.sh`. |
 | `.devcontainer/devcontainer.json` | `claude-code` + `docker-outside-of-docker` features; in-project `initializeCommand` → `init.sh`; `postCreateCommand` → `claude-persist-setup`. |
-| `.devcontainer/init.sh` | Host-side: generates `.env`, pre-creates the persist dir. |
-| `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount. |
+| `.devcontainer/init.sh` | Host-side: generates `.env`, pre-creates the persist dir. Optional — the compose fallbacks cover a bare `docker compose up`. |
+| `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount; installs the baked workflow commands → `~/.claude/commands` and upstream skills → `~/.claude/skills`. |
 
 ### Sandbox
 
@@ -204,6 +204,17 @@ vendoring project still run their own copy) and fall back to the baked one
 otherwise; deps install into `/opt` on first use. Override the baked location with
 `AGENTIC_ORCHESTRATOR_HOME`.
 
+It also bakes the **workflow itself** ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)):
+the user-invoked slash commands (`/afk`, `/hitl`, `/exec`, `/to-prd`, `/to-issues`,
+`/tdd`, `/grill-me-with-docs`) at `/opt/agentic-commands`, plus four model-invoked
+engineering disciplines (`tdd`, `diagnosing-bugs`, `domain-modeling`, `codebase-design`)
+pulled from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT) at
+`/opt/agentic-skills`. At container creation `claude-persist-setup` installs them into
+`~/.claude/commands` and `~/.claude/skills`. This is **groundwork** for running the
+workflow from *inside* the container — the current flow runs Claude on the host (see
+[How it fits together](#how-it-fits-together)), which uses the workspace
+`.claude/commands`, so the baked copies are inert for the host flow today.
+
 To consume it instead of building locally, either point the compose service at it
 
 ```yaml
@@ -222,6 +233,14 @@ from GHCR.
 
 The same [package-visibility](#inner-sandbox-images) note applies — pulling the
 `devcontainer` image anonymously needs it to be public, else `docker login ghcr.io`.
+
+The committed `docker-compose.yml` carries a fallback for every variable
+(`LOCAL_WORKSPACE_FOLDER:-${PWD}`, `SSH_DIR:-${HOME}/.ssh`, …), so a bare
+`docker compose up` from a project root works with no `.env` and no `init.sh` —
+`${PWD}` preserves the path-matched mount ([ADR-0011](docs/adr/0011-path-match-the-outer-mount.md)).
+`init.sh` (run by `up.sh` / `devcontainer up`) stays the path for VS Code and
+per-project container naming, and when it sets those vars they win; it is now an
+optimization, not a requirement.
 
 ## Local model tier (Ollama)
 

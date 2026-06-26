@@ -39,7 +39,7 @@ fi
 echo "Claude Code data redirected → ${PERSIST_DIR}"
 
 # Install the agentic-dev workflow slash commands. They are baked into the image
-# at /opt/agentic-commands (ADR-0016) — outside ~/.claude, which the symlink above
+# at /opt/agentic-commands (ADR-0017) — outside ~/.claude, which the symlink above
 # would otherwise shadow. Copy them into the persisted ~/.claude/commands so the
 # in-container `claude` CLI exposes /grill-me-with-docs, /to-prd, /to-issues, /afk,
 # /hitl, /tdd and /exec in any project, not just one carrying its own .claude/.
@@ -53,7 +53,7 @@ fi
 
 # Install the upstream model-invoked engineering disciplines (tdd, diagnosing-bugs,
 # domain-modeling, codebase-design) baked from mattpocock/skills (MIT) at
-# /opt/agentic-skills. These are the un-forked disciplines the workflow leans on;
+# /opt/agentic-skills (ADR-0017). These are the un-forked disciplines the workflow leans on;
 # the user-invoked commands above are the project's own. Skills live in a separate
 # ~/.claude/skills namespace, so they don't collide with the slash commands. Only
 # subdirectories are copied — the baked LICENSE stays at /opt. Refreshed each create.
