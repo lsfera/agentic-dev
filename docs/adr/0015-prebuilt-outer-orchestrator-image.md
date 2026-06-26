@@ -15,13 +15,21 @@ Because the outer image is a **devcontainer** — its features are applied by th
 devcontainer CLI, not by the Dockerfile — a plain `docker build` of
 `.devcontainer/Dockerfile` produces a broken image (no node/docker/gh/claude). So
 the workflow builds with the **devcontainer CLI** (`devcontainer build --push`),
-which resolves the compose config, runs `initializeCommand`, layers the features,
-and pushes. Tags mirror the inner-image workflow (semver / branch / sha / `latest`
-on the default branch), via `docker/metadata-action`.
+which layers the features and pushes. Tags mirror the inner-image workflow (semver
+/ branch / sha / `latest` on the default branch), via `docker/metadata-action`.
 
-This was validated locally: `devcontainer build` on the compose config yields an
-image with `node`, `docker`, `gh`, `claude`, and the baked-in `afk`/`hitl`
-launchers all present.
+The build uses a dedicated **dockerfile-based** config, `devcontainer.build.json`,
+not the runtime `devcontainer.json` (which is docker-compose, for the workspace /
+SSH / persist / socket mounts and the path-match). The CLI **rejects
+`--platform`/`--push` for compose-based configs** (`--platform or --push not
+supported`) — this was caught by the first CI run, which had pointed at the compose
+config. The runtime mounts are irrelevant to image content, so `devcontainer.build.json`
+mirrors only the `build.dockerfile` + `features`; it must be kept in sync with
+`devcontainer.json`'s feature list.
+
+Validated locally: `devcontainer build --config devcontainer.build.json --platform
+linux/arm64` succeeds (and on the compose config yields an image with `node`,
+`docker`, `gh`, `claude`, and the baked-in `afk`/`hitl` all present).
 
 ## Consequences
 
