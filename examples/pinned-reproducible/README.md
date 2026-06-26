@@ -7,11 +7,13 @@ no `:latest` drift. Useful for CI, audits, or reproducing a past result.
 ## Pick a release
 
 ```bash
-curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name'
-# → e.g. v0.1.3
+curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name | ltrimstr("v")'
+# → e.g. 0.2.0
 ```
 
-Use that tag everywhere below (the example files use `v0.1.3`).
+Use that tag everywhere below (the example files use `0.2.0`). Image tags drop the
+release's `v` (GitHub release `v0.2.0` → image tag `0.2.0`), which is what the
+`ltrimstr("v")` above produces.
 
 ## Inner images
 
@@ -31,7 +33,7 @@ the `build:` block and use the pinned `image:` instead:
 services:
   devcontainer:
     container_name: ${DEVCONTAINER_NAME:-devcontainer}
-    image: ghcr.io/lsfera/agentic-dev/devcontainer:v0.1.3   # instead of build:
+    image: ghcr.io/lsfera/agentic-dev/devcontainer:0.2.0   # instead of build:
     # build:
     #   context: .
     #   dockerfile: Dockerfile

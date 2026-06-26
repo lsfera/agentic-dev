@@ -161,12 +161,13 @@ export SANDCASTLE_OPENCODE_IMAGE=ghcr.io/lsfera/agentic-dev/sandbox-opencode:lat
 Set these in `.sandcastle/orchestrator.env` to make them stick. `:latest` tracks
 the newest publish. The images are built by `.github/workflows/publish-images.yml`
 on version tags (`v*`), on `main`, and via manual dispatch; each release also
-publishes a matching `:vX.Y.Z` tag. To pin a release instead of floating
-`:latest`, resolve the current tag:
+publishes a matching `:X.Y.Z` image tag (the image tag drops the release's `v`,
+per Docker convention). To pin a release instead of floating `:latest`, resolve
+the current tag:
 
 ```bash
-curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name'
-# → e.g. v0.1.3 ; then use ...sandbox:v0.1.3
+curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name | ltrimstr("v")'
+# → e.g. 0.2.0 ; then use ...sandbox:0.2.0
 ```
 
 > **Package visibility.** The published packages (`sandbox`, `sandbox-opencode`,
