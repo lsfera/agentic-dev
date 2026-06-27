@@ -1,16 +1,31 @@
 # agentic-dev
 
-A reusable devcontainer that runs an agentic development workflow inside a Docker sandbox. Claude drives the feature lifecycle from requirements to implementation; all shell execution is isolated in the container. **Each project is self-contained** — it carries its own `.devcontainer/`, so `devcontainer up` and VS Code *Reopen in Container* discover it natively, the container is named per project, and two projects can run side by side.
+A reusable devcontainer + agentic workflow you drop into **your own project**. The
+devcontainer image is published to GHCR and booted by a single self-contained
+`docker-compose.yml` — no clone, no local build, no `init.sh`. Claude drives the
+feature lifecycle from requirements to implementation; all shell execution is isolated
+in a Docker sandbox, and GitHub issues hold the durable state.
 
 ## TL;DR
 
+Drop [`.devcontainer/docker-compose.yml`](.devcontainer/docker-compose.yml) into your
+project (it points at the published image), set your GitHub + Claude credentials, then:
+
 ```bash
-./up.sh .                      # spin up THIS project's sandbox (init.sh runs automatically)
-                               # …drive the workflow with Claude (see "The workflow")…
-./down.sh                      # tear down sandboxes started from this repo when done
+docker compose -f .devcontainer/docker-compose.yml up -d   # standalone — no .env, no init.sh
+#  …drive the workflow with Claude:
+#  /grill-me-with-docs → /to-prd → /to-issues → /afk | /hitl …
+docker compose -f .devcontainer/docker-compose.yml down
 ```
 
-`./up.sh <folder>` works for any folder that holds its own `.devcontainer/`; the dogfood case is this repo itself (`./up.sh .`). VS Code users can skip `up.sh` entirely and use *Reopen in Container*.
+Every variable in the compose file carries a fallback (`${PWD}`, `${HOME}/.ssh`, …), so a
+bare `docker compose up` works with no generated `.env`. Grab a ready-made setup from
+[`examples/`](examples/), or see [Outer orchestrator image](#outer-orchestrator-image)
+to pin a release instead of `:latest`.
+
+> **Developing agentic-dev itself** (the dogfood) uses `./up.sh .` instead — it adds
+> per-project container naming via `init.sh`. See
+> [Local development & dogfood](#local-development--dogfood).
 
 You do **not** need VS Code — the workflow is headless (see [Do I need VS Code?](#do-i-need-vs-code)).
 
@@ -33,8 +48,16 @@ Don't want to build the images locally? Pull the prebuilt ones from GHCR instead
 
 - **Claude runs on the host** and shells into the container with `/exec` → `mcp__docker__run_command(service="devcontainer")`, a thin `docker compose exec` wrapper. Nothing AI runs inside the container.
 - **GitHub issues are the durable state.** The container is disposable; progress lives in issues, not in local files.
+- **The image bakes the workflow in.** The published devcontainer installs the slash commands → `~/.claude/commands` and engineering disciplines → `~/.claude/skills` ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)). Today Claude still drives from the **host** (above), which needs the docker MCP wiring (see [Sandbox wiring](#sandbox-wiring)); baking the workflow in is groundwork toward driving it entirely from the in-container Claude.
 
-## Run commands
+## Local development & dogfood
+
+The `up.sh` / `down.sh` / `code.sh` helpers and `init.sh` are for **developing
+agentic-dev itself** and the per-project-subfolder model — they're not needed to *use*
+the published image, where the [standalone compose file](#tldr) is the whole story.
+`up.sh` adds one thing the bare `docker compose up` doesn't: per-project container
+naming (`DEVCONTAINER_NAME`) derived by `init.sh`, so several projects under this repo
+can run side by side without colliding.
 
 | Command | What it does |
 |---------|--------------|
@@ -60,7 +83,7 @@ No `--config` is needed: the project root holds its own `.devcontainer/`, so the
 
 | You want to… | Do this |
 |--------------|---------|
-| Run the agentic workflow | Just `./up.sh <folder>` — no editor needed |
+| Run the agentic workflow | Just boot the sandbox (`docker compose … up -d`, or `./up.sh <folder>` for the dogfood) — no editor needed |
 | Edit/inspect in VS Code | `./code.sh <folder>` (attaches at the right workspace folder), **or** in VS Code: *Dev Containers: Attach to Running Container* → pick the container → *File ▸ Open Folder ▸ `/workspaces/<folder>`* |
 | Just a shell | `docker exec -it <container> bash` (see table above) |
 
@@ -72,18 +95,16 @@ End to end, from a clean checkout to merged work:
 
 1. **One-time setup**
    - Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.json` (see [Permissions](#permissions)).
-   - Make sure the docker MCP server targets this repo's compose project (see [Sandbox wiring](#sandbox-wiring)).
-   - (`.devcontainer/.env` is generated automatically — `up.sh` / `devcontainer up` run `init.sh` as `initializeCommand`.)
-2. **Create a project folder** under this repo, e.g. `mkdir cv`.
-3. **Spin up the sandbox:** `./up.sh cv`.
-4. **`/grill-me-with-docs`** — Claude interviews you and reads any docs you point at, producing `docs/grill-output.md`.
-5. **`/to-prd`** — turns the interview into a structured `docs/prd.md`.
-6. **`/to-issues`** — breaks the PRD into **vertical slices** as GitHub issues. Unblocked issues get the `ready-for-agent` label.
-7. **Implement** — pick one:
+   - Make sure the docker MCP server targets your project's compose project (see [Sandbox wiring](#sandbox-wiring)).
+2. **Boot the sandbox** in your project: `docker compose -f .devcontainer/docker-compose.yml up -d`. *(Developing this repo? Use `./up.sh <folder>` — see [Local development & dogfood](#local-development--dogfood).)*
+3. **`/grill-me-with-docs`** — Claude interviews you and reads any docs you point at, producing `docs/grill-output.md`.
+4. **`/to-prd`** — turns the interview into a structured `docs/prd.md`.
+5. **`/to-issues`** — breaks the PRD into **vertical slices** as GitHub issues. Unblocked issues get the `ready-for-agent` label.
+6. **Implement** — pick one:
    - **`/afk`** — autonomous: spawns one sub-agent per `ready-for-agent` issue, implements with `/tdd`, commits, closes, and re-labels newly-unblocked dependents. No interruptions.
    - **`/hitl`** — same, but pauses for your approval between issues.
-8. **Review & merge** the resulting commits/PRs as usual.
-9. **`./down.sh cv`** when finished.
+7. **Review & merge** the resulting commits/PRs as usual.
+8. **Tear down** when finished: `docker compose -f .devcontainer/docker-compose.yml down` (or `./down.sh <folder>`).
 
 Each implementation sub-agent is constrained to: the issue body verbatim, `/exec` for all shell (never host Bash), scope limited to that issue's files, no pushing to main, no extra dependencies, and `/tdd` discipline.
 
