@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode } from "./main.ts";
+import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode, resolveDockerHost } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
@@ -913,6 +913,24 @@ test("resolveCredentials: resolves all four credential keys independently", () =
   assert.equal(creds.ANTHROPIC_API_KEY, "ak-env");
   assert.equal(creds.GITHUB_TOKEN, "ght-orch");
   assert.equal(creds.CLAUDE_CODE_OAUTH_TOKEN, "cco-orch");
+});
+
+// ─── resolveDockerHost (socat-proxy bypass) ────────────────────────────────────
+
+test("resolveDockerHost: socat present (direct socket exists) → redirect to docker-host.sock", () => {
+  assert.equal(resolveDockerHost(undefined, true), "unix:///var/run/docker-host.sock");
+});
+
+test("resolveDockerHost: no direct socket (bare compose, no socat) → leave DOCKER_HOST untouched", () => {
+  assert.equal(resolveDockerHost(undefined, false), undefined);
+});
+
+test("resolveDockerHost: an explicit DOCKER_HOST always wins, even when the direct socket exists", () => {
+  assert.equal(resolveDockerHost("unix:///custom.sock", true), undefined);
+});
+
+test("resolveDockerHost: explicit DOCKER_HOST with no direct socket is still left untouched", () => {
+  assert.equal(resolveDockerHost("tcp://1.2.3.4:2375", false), undefined);
 });
 
 // ─── resolveRunMode ───────────────────────────────────────────────────────────

@@ -26,7 +26,7 @@ import { createHmac } from "node:crypto";
 import * as https from "node:https";
 import * as http from "node:http";
 import { execFile, spawn } from "node:child_process";
-import { mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
@@ -56,6 +56,36 @@ export function parseOrchEnv(content: string): Record<string, string> {
     if (key) result[key] = value;
   }
   return result;
+}
+
+/**
+ * Decide the DOCKER_HOST the orchestrator's docker CLI should use, to dodge the
+ * docker-outside-of-docker socat proxy.
+ *
+ * The DooD feature fixes socket permissions by fronting the host socket with
+ * `socat UNIX-LISTEN:/var/run/docker.sock ... UNIX-CONNECT:/var/run/docker-host.sock`.
+ * But socat tears down `docker exec`'s *hijacked* bidirectional stream after the
+ * first data burst — and sandcastle streams the agent's stream-json over
+ * `docker exec`. So the agent's init line arrives, then the rest of the turn is
+ * dropped: every iteration is an empty "started → stopped" turn with zero commits
+ * (the close handler's `code ?? 0` even masks it as a clean exit). The feature
+ * also exposes the *real* host socket at docker-host.sock and adds the user to the
+ * docker group, so pointing the CLI straight at it restores streaming.
+ *
+ * Guarded so it is a no-op outside the socat setup — returns undefined (leave
+ * DOCKER_HOST as-is) when the caller already set one, or when the direct socket is
+ * absent. A bare `docker compose up` (no DooD feature, no socat) has no
+ * docker-host.sock and its raw /var/run/docker.sock works natively, so it must be
+ * left untouched. Pure: the decision is returned, not applied, so it's testable
+ * without env/fs side effects.
+ */
+export function resolveDockerHost(
+  currentDockerHost: string | undefined,
+  directSocketExists: boolean,
+): string | undefined {
+  if (currentDockerHost) return undefined; // an explicit choice always wins
+  if (!directSocketExists) return undefined; // no socat proxy in the way
+  return "unix:///var/run/docker-host.sock";
 }
 
 export interface ResolvedCredentials {
@@ -542,6 +572,17 @@ async function main(): Promise<void> {
     detachAndRelaunch(mode);
     return;
   }
+
+  // Dodge the docker-outside-of-docker socat proxy (see resolveDockerHost): socat
+  // breaks docker exec's streamed output, which sandcastle relies on for the agent
+  // turn — without this every iteration is an empty turn. No-op when socat isn't in
+  // play (bare `docker compose up`, or an explicit DOCKER_HOST). Must run before any
+  // docker call below.
+  const dockerHost = resolveDockerHost(
+    process.env.DOCKER_HOST,
+    existsSync("/var/run/docker-host.sock"),
+  );
+  if (dockerHost) process.env.DOCKER_HOST = dockerHost;
 
   const repo = process.env.AGENTIC_REPO;
   const base = process.env.AGENTIC_BASE_BRANCH ?? "main";
