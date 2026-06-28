@@ -67,6 +67,19 @@ services:
         source: ${DOCKER_SOCK:-/var/run/docker.sock}
         target: /var/run/docker.sock
 
+    # Cockpit-mode credential passthrough (ADR-0018): forward GitHub and Claude
+    # credentials from the host shell into the container so a human can run the
+    # full workflow from inside (`docker compose exec -it devcontainer cockpit`).
+    # Values are taken from the host environment — nothing is committed here.
+    # Unset host vars are forwarded as empty strings (harmless; the TS resolver
+    # and gh/claude CLIs treat empty as absent). AGENTIC_IN_CONTAINER is baked
+    # into the image via the Dockerfile ENV directive, not forwarded here.
+    environment:
+      GH_TOKEN: ${GH_TOKEN:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+
     working_dir: ${WORKSPACE_FOLDER:-/workspace}
     command: sleep infinity
 

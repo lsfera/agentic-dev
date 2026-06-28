@@ -36,6 +36,63 @@ export { SANDBOX_LABEL };
 
 const sh = promisify(execFile);
 
+/**
+ * Parse dotenv-style content (KEY=VALUE, # comments, blank lines) into a
+ * plain object. Supports only the simple KEY=VALUE syntax used by
+ * orchestrator.env — no quoted strings, no variable expansion.
+ * Pure: no I/O; accepts raw file content so callers can be tested without disk.
+ */
+export function parseOrchEnv(content: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx < 1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const value = trimmed.slice(eqIdx + 1);
+    if (key) result[key] = value;
+  }
+  return result;
+}
+
+export interface ResolvedCredentials {
+  readonly GH_TOKEN: string | undefined;
+  readonly GITHUB_TOKEN: string | undefined;
+  readonly ANTHROPIC_API_KEY: string | undefined;
+  readonly CLAUDE_CODE_OAUTH_TOKEN: string | undefined;
+  /** True when AGENTIC_IN_CONTAINER is set (cockpit mode). */
+  readonly cockpit: boolean;
+}
+
+/**
+ * Resolve agent credentials from the process env and parsed orchestrator.env
+ * content, with process env taking precedence over orchestrator.env. Pure: no
+ * disk I/O or process.env mutation — accepts both sources as plain objects.
+ *
+ * Precedence: a non-empty value in `env` wins; empty or absent values fall
+ * through to `orchEnv`. The `cockpit` field reflects whether AGENTIC_IN_CONTAINER
+ * is set in `env` (the marker baked into the devcontainer image, ADR-0018).
+ */
+export function resolveCredentials(
+  env: Record<string, string | undefined>,
+  orchEnv: Record<string, string | undefined> = {},
+): ResolvedCredentials {
+  const pick = (key: string): string | undefined => {
+    const envVal = env[key];
+    if (envVal !== undefined && envVal !== '') return envVal;
+    const orchVal = orchEnv[key];
+    return orchVal !== undefined && orchVal !== '' ? orchVal : undefined;
+  };
+  return {
+    GH_TOKEN: pick('GH_TOKEN'),
+    GITHUB_TOKEN: pick('GITHUB_TOKEN'),
+    ANTHROPIC_API_KEY: pick('ANTHROPIC_API_KEY'),
+    CLAUDE_CODE_OAUTH_TOKEN: pick('CLAUDE_CODE_OAUTH_TOKEN'),
+    cockpit: Boolean(env['AGENTIC_IN_CONTAINER']),
+  };
+}
+
 /** Read the concurrency cap from AGENTIC_CONCURRENCY (default 1, serial). */
 export function parseConcurrency(): number {
   return Math.max(1, Number(process.env.AGENTIC_CONCURRENCY ?? "1") || 1);

@@ -5,13 +5,24 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 # fixes the socket group for the non-root user at container startup, so no
 # manual CLI install or DOCKER_GID handling is needed here.
 
+# Cockpit-mode marker: any in-container process can detect it is inside the
+# agentic-dev devcontainer by checking AGENTIC_IN_CONTAINER (ADR-0018).
+# /exec uses this to run commands in the local shell instead of via docker MCP.
+ENV AGENTIC_IN_CONTAINER=1
+
 COPY claude-persist-setup /usr/local/bin/claude-persist-setup
 
 # Ergonomic orchestrator launchers: `afk` / `hitl` from anywhere in a project,
 # instead of `.sandcastle/run.sh afk …`. The mode is dispatched from the invoked
 # name, so `hitl` is a symlink to the same script (busybox-style multi-call).
 COPY afk /usr/local/bin/afk
+
+# Cockpit shim: `cockpit` (or `docker compose exec devcontainer cockpit`) lands
+# Claude Code in the workspace working_dir without the user having to cd first.
+COPY cockpit /usr/local/bin/cockpit
+
 RUN chmod +x /usr/local/bin/claude-persist-setup /usr/local/bin/afk \
+              /usr/local/bin/cockpit \
   && ln -sf afk /usr/local/bin/hitl
 
 # Optionally bake the orchestrator SOURCE (ADR-0016) + workflow slash commands +
@@ -64,5 +75,14 @@ RUN if [ -n "$BAKE_ORCHESTRATOR" ]; then \
              /opt/agentic-orchestrator/node_modules /tmp/agentic-src /tmp/matt-skills && \
       chown -R vscode:vscode /opt/agentic-orchestrator /opt/agentic-commands /opt/agentic-skills ; \
     fi
+
+# Global Claude Code settings for cockpit mode (ADR-0018): pre-allow the
+# workflow tools (local shell, gh, git, afk/hitl) so the human doesn't get
+# permission prompts when driving /grill→/to-prd→/to-issues from inside.
+# Installed by claude-persist-setup into ~/.claude/settings.json at create time.
+# A workspace .claude/settings.local.json still overrides per Claude Code's
+# normal settings hierarchy.
+COPY cockpit-settings.json /opt/agentic-settings/settings.json
+RUN chown -R vscode:vscode /opt/agentic-settings
 
 USER vscode

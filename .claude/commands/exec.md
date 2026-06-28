@@ -1,14 +1,17 @@
 # /exec
 
-Run a shell command in the Docker sandbox.
+Run a shell command — works in both host-driven and cockpit mode.
 
 **Usage:** `/exec <command>`
 
-**How:** Call `mcp__docker__run_command` with:
-- `command`: the shell command to run
-- `service`: `"devcontainer"`
+**How (context-aware — single corpus, no forks):**
 
-**This is the only place `mcp__docker__run_command` is called.** All other commands use `/exec`.
+- **Cockpit mode** (`AGENTIC_IN_CONTAINER` is set in the environment): run the command using the Bash tool in the local shell.
+- **Host mode** (no `AGENTIC_IN_CONTAINER`): call `mcp__docker__run_command` with `service: "devcontainer"`, routing to the sandbox over docker MCP.
+
+Check `process.env.AGENTIC_IN_CONTAINER` (or `$AGENTIC_IN_CONTAINER` in the shell) to decide which path to take.
+
+**This is the only shell-dispatch boundary.** All slash commands (including `/tdd`) call `/exec` — they work unchanged in both modes.
 
 **Examples:**
 - `/exec npm test`

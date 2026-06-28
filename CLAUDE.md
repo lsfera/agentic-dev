@@ -1,20 +1,30 @@
 # agentic-dev
 
-A reusable devcontainer + agentic workflow. Claude runs on the **host** and drives a
-disposable Docker sandbox; GitHub issues hold the durable state. See `README.md` for the
-full picture — this file is the operating contract.
+A reusable devcontainer + agentic workflow. GitHub issues hold the durable state.
+See `README.md` for the full picture — this file is the operating contract.
+
+There are two ways to drive the workflow:
+
+| Mode | Where Claude runs | How to start |
+|------|------------------|--------------|
+| **Host-driven** (default) | On the host; reaches the container via docker MCP | `./up.sh .` then open a host Claude session |
+| **Cockpit** | Inside the devcontainer | `docker compose exec -it devcontainer cockpit` |
+
+Both modes use the same slash commands. `/exec` detects the context automatically
+(`AGENTIC_IN_CONTAINER` env var, baked into the image) and routes correctly.
 
 ## Execution environment
 
-- When a sandbox is running, **use `/exec` for all shell commands**, never the Bash tool.
-  `/exec` routes to `mcp__docker__run_command(service="devcontainer")` (a `docker compose exec` wrapper).
+- **Use `/exec` for all shell commands**, never the Bash tool directly.
+  - **Host mode:** `/exec` routes to `mcp__docker__run_command(service="devcontainer")`.
+  - **Cockpit mode:** `/exec` runs the command in the local shell (inside the container).
 - The workflow is **headless** — VS Code is never required. (`code.sh` exists only for the human.)
 - Each project is **self-contained**: it holds its own `.devcontainer/`, gets a per-project
   container name (`DEVCONTAINER_NAME`), and is discovered natively by `devcontainer up` /
-  VS Code *Reopen in Container* (ADR-0012). `/exec` targets `devcontainer:<DEVCONTAINER_NAME>`
-  (this repo: `agentic-dev`).
+  VS Code *Reopen in Container* (ADR-0012). In host mode, `/exec` targets
+  `devcontainer:<DEVCONTAINER_NAME>` (this repo: `agentic-dev`).
 
-## Run commands (host)
+## Run commands (host-driven mode)
 
 ```
 ./up.sh .                    # spin up THIS project's sandbox (init.sh runs automatically)
@@ -22,6 +32,19 @@ full picture — this file is the operating contract.
 ./down.sh <folder>           # tear down that sandbox   (./down.sh = all from this repo)
 ./code.sh <folder>           # optional: attach VS Code to a running sandbox
 ```
+
+## Cockpit mode (drive from inside the container)
+
+With only the compose file and exported credentials — no host Claude, no docker MCP wiring:
+
+```sh
+# Export credentials on the host, then:
+docker compose -f .devcontainer/docker-compose.yml exec -it devcontainer cockpit
+# → lands in Claude Code inside the container, at the workspace root
+```
+
+The workflow slash commands (`/grill-me-with-docs`, `/to-prd`, `/to-issues`, `/afk`, `/hitl`)
+are baked into the published image and available immediately (ADR-0017/0018).
 
 ## Development workflow
 
@@ -45,8 +68,7 @@ resolved env without launching.
 The **published** image additionally bakes the workflow slash commands → `~/.claude/commands`
 and four upstream engineering disciplines → `~/.claude/skills` (ADR-0017), and
 `.devcontainer/docker-compose.yml` boots standalone without `init.sh` (every var has a
-fallback). Both are groundwork for running the workflow from *inside* the container; this
-repo still drives it from the host via `/exec`, using the workspace `.claude/commands`.
+fallback). This is what cockpit mode depends on.
 
 ### Issue lifecycle
 
@@ -63,8 +85,8 @@ adds dependencies on its own.
 
 ## Permissions
 
-Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.json` so `/exec`
-never prompts:
+**Host-driven mode:** add `mcp__docker__run_command` to the `allow` list in
+`.claude/settings.local.json` so `/exec` never prompts:
 
 ```json
 {
@@ -73,3 +95,7 @@ never prompts:
   }
 }
 ```
+
+**Cockpit mode:** the published image bakes a global `~/.claude/settings.json` that
+pre-allows `gh`, `git`, `afk`, and `hitl` (installed by `claude-persist-setup`). A
+workspace `.claude/settings.local.json` overrides it as usual.
