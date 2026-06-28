@@ -68,3 +68,14 @@ if [ -d "$BAKED_SKILLS" ]; then
   done
   echo "Installed upstream engineering-discipline skills → ~/.claude/skills"
 fi
+
+# Install the global cockpit-mode settings (ADR-0018): pre-allow gh, git,
+# afk/hitl so the human isn't prompted for every workflow command when driving
+# the workflow from inside the container. Only installed when the baked file
+# exists; a workspace .claude/settings.local.json overrides via Claude Code's
+# normal settings hierarchy. Refreshed on every create so a newer image wins.
+BAKED_SETTINGS="/opt/agentic-settings/settings.json"
+if [ -f "$BAKED_SETTINGS" ]; then
+  cp -f "$BAKED_SETTINGS" "${PERSIST_DATA}/settings.json"
+  echo "Installed cockpit-mode global settings → ~/.claude/settings.json"
+fi

@@ -2,3 +2,5 @@
 !Dockerfile
 !claude-persist-setup
 !afk
+!cockpit
+!cockpit-settings.json

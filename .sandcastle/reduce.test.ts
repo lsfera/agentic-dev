@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent } from "./main.ts";
+import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
@@ -829,4 +829,88 @@ test("demo: A blocks B — A starts first; after A merges, B enters ready-set", 
   assert.deepEqual(reduce(step3, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 2 },
   ]);
+});
+
+// ─── parseOrchEnv ─────────────────────────────────────────────────────────────
+
+test("parseOrchEnv: empty string returns {}", () => {
+  assert.deepEqual(parseOrchEnv(""), {});
+});
+
+test("parseOrchEnv: comment-only lines are skipped", () => {
+  assert.deepEqual(parseOrchEnv("# this is a comment\n# another\n"), {});
+});
+
+test("parseOrchEnv: blank lines are skipped", () => {
+  assert.deepEqual(parseOrchEnv("\n\n\n"), {});
+});
+
+test("parseOrchEnv: KEY=value parses correctly", () => {
+  assert.deepEqual(parseOrchEnv("GH_TOKEN=abc123"), { GH_TOKEN: "abc123" });
+});
+
+test("parseOrchEnv: blank value is preserved as empty string", () => {
+  assert.deepEqual(parseOrchEnv("GH_TOKEN="), { GH_TOKEN: "" });
+});
+
+test("parseOrchEnv: multiple vars parsed in order", () => {
+  const result = parseOrchEnv("GH_TOKEN=tok\nANTHROPIC_API_KEY=sk-key\n");
+  assert.equal(result.GH_TOKEN, "tok");
+  assert.equal(result.ANTHROPIC_API_KEY, "sk-key");
+});
+
+test("parseOrchEnv: comment lines mixed with vars are skipped", () => {
+  const result = parseOrchEnv("# set this\nGH_TOKEN=mytoken\n# done\n");
+  assert.deepEqual(result, { GH_TOKEN: "mytoken" });
+});
+
+// ─── resolveCredentials ───────────────────────────────────────────────────────
+
+test("resolveCredentials: env-only credentials resolve", () => {
+  const creds = resolveCredentials({ GH_TOKEN: "from-env" });
+  assert.equal(creds.GH_TOKEN, "from-env");
+});
+
+test("resolveCredentials: orchestrator.env-only credentials resolve", () => {
+  const creds = resolveCredentials({}, { GH_TOKEN: "from-orch" });
+  assert.equal(creds.GH_TOKEN, "from-orch");
+});
+
+test("resolveCredentials: env wins over orchestrator.env when both present", () => {
+  const creds = resolveCredentials({ GH_TOKEN: "from-env" }, { GH_TOKEN: "from-orch" });
+  assert.equal(creds.GH_TOKEN, "from-env");
+});
+
+test("resolveCredentials: missing credentials are undefined", () => {
+  const creds = resolveCredentials({}, {});
+  assert.equal(creds.GH_TOKEN, undefined);
+  assert.equal(creds.GITHUB_TOKEN, undefined);
+  assert.equal(creds.ANTHROPIC_API_KEY, undefined);
+  assert.equal(creds.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+test("resolveCredentials: empty env value falls through to orchestrator.env", () => {
+  const creds = resolveCredentials({ GH_TOKEN: "" }, { GH_TOKEN: "from-orch" });
+  assert.equal(creds.GH_TOKEN, "from-orch");
+});
+
+test("resolveCredentials: AGENTIC_IN_CONTAINER set → cockpit true", () => {
+  const creds = resolveCredentials({ AGENTIC_IN_CONTAINER: "1" });
+  assert.equal(creds.cockpit, true);
+});
+
+test("resolveCredentials: AGENTIC_IN_CONTAINER absent → cockpit false", () => {
+  const creds = resolveCredentials({});
+  assert.equal(creds.cockpit, false);
+});
+
+test("resolveCredentials: resolves all four credential keys independently", () => {
+  const creds = resolveCredentials(
+    { GH_TOKEN: "gh-env", ANTHROPIC_API_KEY: "ak-env" },
+    { GITHUB_TOKEN: "ght-orch", CLAUDE_CODE_OAUTH_TOKEN: "cco-orch" },
+  );
+  assert.equal(creds.GH_TOKEN, "gh-env");
+  assert.equal(creds.ANTHROPIC_API_KEY, "ak-env");
+  assert.equal(creds.GITHUB_TOKEN, "ght-orch");
+  assert.equal(creds.CLAUDE_CODE_OAUTH_TOKEN, "cco-orch");
 });

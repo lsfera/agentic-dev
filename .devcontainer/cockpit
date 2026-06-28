@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# cockpit — launch Claude Code in the workspace directory for cockpit mode
+# (ADR-0018). Lets `docker compose exec -it devcontainer cockpit` drop the
+# human into the right working dir without a manual `cd` first.
+set -euo pipefail
+cd "${WORKSPACE_FOLDER:-/workspace}"
+exec claude "$@"
