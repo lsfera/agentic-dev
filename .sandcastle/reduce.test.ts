@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials } from "./main.ts";
+import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
@@ -913,4 +913,23 @@ test("resolveCredentials: resolves all four credential keys independently", () =
   assert.equal(creds.ANTHROPIC_API_KEY, "ak-env");
   assert.equal(creds.GITHUB_TOKEN, "ght-orch");
   assert.equal(creds.CLAUDE_CODE_OAUTH_TOKEN, "cco-orch");
+});
+
+// ─── resolveRunMode ───────────────────────────────────────────────────────────
+
+test("resolveRunMode: AGENTIC_IN_CONTAINER set → detached", () => {
+  assert.equal(resolveRunMode({ AGENTIC_IN_CONTAINER: "1" }), "detached");
+});
+
+test("resolveRunMode: AGENTIC_IN_CONTAINER absent → foreground", () => {
+  assert.equal(resolveRunMode({}), "foreground");
+});
+
+test("resolveRunMode: AGENTIC_IN_CONTAINER empty string → foreground", () => {
+  assert.equal(resolveRunMode({ AGENTIC_IN_CONTAINER: "" }), "foreground");
+});
+
+test("resolveRunMode: any truthy value for AGENTIC_IN_CONTAINER → detached", () => {
+  assert.equal(resolveRunMode({ AGENTIC_IN_CONTAINER: "true" }), "detached");
+  assert.equal(resolveRunMode({ AGENTIC_IN_CONTAINER: "yes" }), "detached");
 });

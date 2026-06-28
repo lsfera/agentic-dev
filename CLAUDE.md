@@ -46,6 +46,32 @@ docker compose -f .devcontainer/docker-compose.yml exec -it devcontainer cockpit
 The workflow slash commands (`/grill-me-with-docs`, `/to-prd`, `/to-issues`, `/afk`, `/hitl`)
 are baked into the published image and available immediately (ADR-0017/0018).
 
+### Autonomous cockpit: kick off, monitor, stop
+
+Inside cockpit, `/afk` (and `/hitl`) **detach automatically** — the orchestrator
+starts as a background job, freeing the interactive Claude session immediately:
+
+```sh
+/afk          # kicks off, prints PID + log path, returns to prompt
+```
+
+The orchestrator writes to `.sandcastle/logs/<mode>-<timestamp>.log` and saves
+its PID in `.sandcastle/<mode>.pid`. To monitor or stop it:
+
+```sh
+# Tail the live log (Ctrl-C to stop tailing; orchestrator keeps running)
+tail -f .sandcastle/logs/afk-*.log
+
+# Check the PID
+cat .sandcastle/afk.pid
+
+# Stop the orchestrator
+kill $(cat .sandcastle/afk.pid) && rm .sandcastle/afk.pid
+```
+
+Host-driven `/afk`/`/hitl` (via `/exec`) are unaffected — they run in the
+foreground as before.
+
 ## Development workflow
 
 ```
