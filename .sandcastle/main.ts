@@ -25,9 +25,11 @@
 import { createHmac } from "node:crypto";
 import * as https from "node:https";
 import * as http from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
 import { reduce, READY_LABEL, type State, type Pr, type Policy, type Mode } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
@@ -91,6 +93,63 @@ export function resolveCredentials(
     CLAUDE_CODE_OAUTH_TOKEN: pick('CLAUDE_CODE_OAUTH_TOKEN'),
     cockpit: Boolean(env['AGENTIC_IN_CONTAINER']),
   };
+}
+
+/**
+ * Resolve how the orchestrator process should be launched. Pure function — no
+ * I/O. Returns 'detached' when the cockpit marker is present (AGENTIC_IN_CONTAINER
+ * is set to a non-empty value, baked into the devcontainer image by ADR-0018),
+ * 'foreground' otherwise (host-driven mode, /exec runs the orchestrator directly).
+ *
+ * The launcher (run.sh) always execs `tsx main.ts`; this function is the sole
+ * decision point so detachment logic lives in TypeScript, not in the shell.
+ */
+export function resolveRunMode(env: Record<string, string | undefined>): 'detached' | 'foreground' {
+  return env['AGENTIC_IN_CONTAINER'] ? 'detached' : 'foreground';
+}
+
+/**
+ * Relaunch the orchestrator as a detached background process inside the
+ * container. Called when resolveRunMode() returns 'detached'. Spawns a new
+ * tsx process with AGENTIC_IN_CONTAINER removed (so the child resolves
+ * 'foreground' and runs the orchestrator loop normally), redirects stdio to a
+ * timestamped log file under .sandcastle/logs/, saves the PID, prints
+ * monitoring hints, and returns — the caller exits immediately after.
+ */
+function detachAndRelaunch(mode: string): void {
+  const cwd = process.cwd();
+  const logsDir = join(cwd, '.sandcastle', 'logs');
+  mkdirSync(logsDir, { recursive: true });
+
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const logPath = join(logsDir, `${mode}-${ts}.log`);
+  const pidPath = join(cwd, '.sandcastle', `${mode}.pid`);
+
+  const logFd = openSync(logPath, 'w');
+
+  const tsxBin = join(dirname(fileURLToPath(import.meta.url)), 'node_modules', '.bin', 'tsx');
+  const mainTs = fileURLToPath(import.meta.url);
+
+  // Strip the cockpit marker so the child resolves 'foreground' and runs the
+  // orchestrator loop directly without triggering another detach.
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined && k !== 'AGENTIC_IN_CONTAINER') childEnv[k] = v;
+  }
+
+  const child = spawn(tsxBin, [mainTs], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: childEnv,
+  });
+  child.unref();
+  closeSync(logFd);
+
+  writeFileSync(pidPath, String(child.pid));
+  console.log(`[cockpit] ${mode} started in background (PID ${child.pid})`);
+  console.log(`[cockpit] log:  ${logPath}`);
+  console.log(`[cockpit] tail: tail -f ${logPath}`);
+  console.log(`[cockpit] stop: kill $(cat ${pidPath}) && rm ${pidPath}`);
 }
 
 /** Read the concurrency cap from AGENTIC_CONCURRENCY (default 1, serial). */
@@ -477,6 +536,13 @@ export function startSmeeListener(
 }
 
 async function main(): Promise<void> {
+  const mode = (process.env.AGENTIC_MODE ?? "afk") as Mode;
+
+  if (resolveRunMode(process.env) === 'detached') {
+    detachAndRelaunch(mode);
+    return;
+  }
+
   const repo = process.env.AGENTIC_REPO;
   const base = process.env.AGENTIC_BASE_BRANCH ?? "main";
   const repoRoot = process.cwd();
@@ -513,7 +579,6 @@ async function main(): Promise<void> {
   // GitHub X-GitHub-Delivery ids seen via smee — coarse delivery-level de-dupe.
   const seenDeliveries = new Set<string>();
 
-  const mode = (process.env.AGENTIC_MODE ?? "afk") as Mode;
   const policy: Policy = { concurrency: parseConcurrency(), mode };
 
   // Dispatch a PrMerged event and execute the resulting Relabel actions.
