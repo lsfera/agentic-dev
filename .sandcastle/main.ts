@@ -30,9 +30,10 @@ import { existsSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
-import { reduce, READY_LABEL, type State, type Pr, type Policy, type Mode } from "./reduce.ts";
+import { reduce, READY_LABEL, reviewVerdict, type State, type Pr, type Policy, type Mode } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
+import { ReviewerAdapter } from "./reviewer-adapter.ts";
 
 export { SANDBOX_LABEL };
 
@@ -612,6 +613,12 @@ async function main(): Promise<void> {
     network,
   });
 
+  const reviewer = new ReviewerAdapter({
+    model: process.env.AGENTIC_MODEL,
+    cwd: repoRoot,
+    baseBranch: base,
+  });
+
   const inFlight: number[] = [];
   // Issue ids whose PrMerged event has been dispatched to the reducer.
   // Synchronous check + add before the first await ensures concurrent smee
@@ -771,14 +778,57 @@ async function main(): Promise<void> {
           };
           const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
           for (const action of finishActions) {
-            if (action.type === "EnableAutoMerge") {
-              console.log(`[${mode}] #${n} → enabling auto-merge`);
+            if (action.type === "StartReview") {
+              console.log(`[${mode}] #${n} → running AI review`);
+              let verdict: import("./reduce.ts").ReviewVerdict;
+              let reviewOutput: import("./reduce.ts").ReviewOutput | null = null;
               try {
-                await issues.enableAutoMerge(action.pr.issue);
+                const ghIssue = await issues.get(n);
+                const diff = await issues.getPrDiff(n);
+                const result = await reviewer.runReview(
+                  {
+                    issueNumber: n,
+                    issueTitle: ghIssue.title,
+                    issueBody: ghIssue.body,
+                    branch: `agent/issue-${n}`,
+                    prNumber: n,
+                  },
+                  diff,
+                );
+                verdict = result.verdict;
+                reviewOutput = result.output;
               } catch (err) {
-                // A config gap (auto-merge disabled, no required check) must not
-                // crash the orchestrator — the PR stays open for a human to merge.
-                console.error(`[${mode}] #${n} could not enable auto-merge:`, err);
+                // Fail-safe: any reviewer crash → changes-requested, never auto-merges.
+                console.warn(`[${mode}] #${n} reviewer failed — defaulting to changes-requested:`, err);
+                verdict = reviewVerdict(null);
+              }
+              console.log(`[${mode}] #${n} review verdict: ${verdict}`);
+
+              const reviewActions = reduce(finishState, {
+                type: "ReviewFinished",
+                issue: n,
+                pr: action.pr,
+                verdict,
+              });
+              for (const reviewAction of reviewActions) {
+                if (reviewAction.type === "EnableAutoMerge") {
+                  console.log(`[${mode}] #${n} review passed → enabling auto-merge`);
+                  try {
+                    await issues.enableAutoMerge(reviewAction.pr.issue);
+                  } catch (err) {
+                    console.error(`[${mode}] #${n} could not enable auto-merge:`, err);
+                  }
+                }
+                if (reviewAction.type === "WaitForHuman") {
+                  console.log(`[${mode}] #${n} review requested changes → parked for human`);
+                  if (reviewOutput) {
+                    try {
+                      await issues.postPrReview(n, reviewOutput);
+                    } catch (err) {
+                      console.error(`[${mode}] #${n} could not post PR review:`, err);
+                    }
+                  }
+                }
               }
             }
             if (action.type === "WaitForHuman") {

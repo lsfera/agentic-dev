@@ -8,7 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reduce, READY_LABEL, type State, type CiStatus, type Pr } from "./reduce.ts";
+import { reduce, READY_LABEL, reviewVerdict, type State, type CiStatus, type Pr, type ReviewOutput } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
 import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode, resolveDockerHost } from "./main.ts";
 import { createHmac } from "node:crypto";
@@ -210,11 +210,11 @@ test("PrMerged unblocks all fully-resolved dependents in one call", () => {
 
 // ─── SandboxFinished / EnableAutoMerge / WaitForHuman ───────────────────────
 
-test("afk mode + SandboxFinished → EnableAutoMerge", () => {
+test("afk mode + SandboxFinished → StartReview (not EnableAutoMerge)", () => {
   const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
   const state = base({ policy: { concurrency: 1, mode: "afk" } });
   assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
-    { type: "EnableAutoMerge", pr },
+    { type: "StartReview", pr },
   ]);
 });
 
@@ -224,6 +224,65 @@ test("hitl mode + SandboxFinished → WaitForHuman", () => {
   assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
     { type: "WaitForHuman", pr },
   ]);
+});
+
+test("ReviewFinished pass → EnableAutoMerge", () => {
+  const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
+  const state = base({ policy: { concurrency: 1, mode: "afk" } });
+  assert.deepEqual(reduce(state, { type: "ReviewFinished", issue: 1, pr, verdict: "pass" }), [
+    { type: "EnableAutoMerge", pr },
+  ]);
+});
+
+test("ReviewFinished changes-requested → WaitForHuman", () => {
+  const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
+  const state = base({ policy: { concurrency: 1, mode: "afk" } });
+  assert.deepEqual(
+    reduce(state, { type: "ReviewFinished", issue: 1, pr, verdict: "changes-requested" }),
+    [{ type: "WaitForHuman", pr }],
+  );
+});
+
+test("onTick does not Stop while a PR is awaiting/under review (open, non-conflicting)", () => {
+  const state = base({
+    issues: [],
+    prs: [{ issue: 1, ciStatus: "pending", merged: false }],
+    policy: { concurrency: 1, mode: "afk" },
+  });
+  const actions = reduce(state, { type: "Tick" });
+  assert.ok(!actions.some((a) => a.type === "Stop"), "open PR under review keeps loop alive");
+});
+
+// ─── reviewVerdict ───────────────────────────────────────────────────────────
+
+test("reviewVerdict: valid pass output → 'pass'", () => {
+  const output: ReviewOutput = { verdict: "pass", summary: "LGTM", comments: [] };
+  assert.equal(reviewVerdict(output), "pass");
+});
+
+test("reviewVerdict: valid changes-requested output → 'changes-requested'", () => {
+  const output: ReviewOutput = {
+    verdict: "changes-requested",
+    summary: "needs work",
+    comments: [{ path: "foo.ts", line: 1, body: "fix this" }],
+  };
+  assert.equal(reviewVerdict(output), "changes-requested");
+});
+
+test("reviewVerdict: Error → 'changes-requested' (fail-safe)", () => {
+  assert.equal(reviewVerdict(new Error("extraction failed")), "changes-requested");
+});
+
+test("reviewVerdict: null → 'changes-requested' (fail-safe)", () => {
+  assert.equal(reviewVerdict(null), "changes-requested");
+});
+
+test("reviewVerdict: undefined → 'changes-requested' (fail-safe)", () => {
+  assert.equal(reviewVerdict(undefined), "changes-requested");
+});
+
+test("reviewVerdict: malformed object (no verdict field) → 'changes-requested' (fail-safe)", () => {
+  assert.equal(reviewVerdict({ summary: "hmm" } as unknown as ReviewOutput), "changes-requested");
 });
 
 test("afk mode + Tick with open PR and nothing else ready → no Stop (waiting for CI)", () => {

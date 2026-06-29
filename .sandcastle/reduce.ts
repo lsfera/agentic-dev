@@ -24,6 +24,20 @@ export const READY_LABEL = "ready-for-agent";
 
 export type CiStatus = "none" | "pending" | "success" | "failure" | "conflicting";
 
+export type ReviewVerdict = "pass" | "changes-requested";
+
+export interface ReviewComment {
+  readonly path: string;
+  readonly line: number;
+  readonly body: string;
+}
+
+export interface ReviewOutput {
+  readonly verdict: ReviewVerdict;
+  readonly summary: string;
+  readonly comments: ReadonlyArray<ReviewComment>;
+}
+
 export interface Issue {
   readonly id: number;
   readonly labels: string[];
@@ -56,10 +70,12 @@ export type Event =
   | { type: "Tick" }
   | { type: "PrMerged"; pr: Pr }
   | { type: "SandboxFinished"; issue: number; pr: Pr }
-  | { type: "SandboxFailed"; issue: number };
+  | { type: "SandboxFailed"; issue: number }
+  | { type: "ReviewFinished"; issue: number; pr: Pr; verdict: ReviewVerdict };
 
 export type Action =
   | { type: "StartSandbox"; issueId: number }
+  | { type: "StartReview"; pr: Pr }
   | { type: "EnableAutoMerge"; pr: Pr }
   | { type: "Relabel"; issueId: number; label: string }
   | { type: "WaitForHuman"; pr: Pr }
@@ -73,6 +89,8 @@ export function reduce(state: State, event: Event): Action[] {
       return onPrMerged(state, event.pr);
     case "SandboxFinished":
       return onSandboxFinished(state, event);
+    case "ReviewFinished":
+      return onReviewFinished(event);
     // SandboxFailed lands in a later slice.
     default:
       return [];
@@ -113,9 +131,28 @@ function onPrMerged(state: State, mergedPr: Pr): Action[] {
 
 function onSandboxFinished(state: State, event: { issue: number; pr: Pr }): Action[] {
   if (state.policy.mode === "afk") {
+    return [{ type: "StartReview", pr: event.pr }];
+  }
+  return [{ type: "WaitForHuman", pr: event.pr }];
+}
+
+function onReviewFinished(event: { issue: number; pr: Pr; verdict: ReviewVerdict }): Action[] {
+  if (event.verdict === "pass") {
     return [{ type: "EnableAutoMerge", pr: event.pr }];
   }
   return [{ type: "WaitForHuman", pr: event.pr }];
+}
+
+/**
+ * Map a structured review output (or any extraction/validation error) to a
+ * merge verdict. Fail-safe: any missing or malformed result → "changes-requested"
+ * so a reviewer crash never silently auto-merges.
+ */
+export function reviewVerdict(result: ReviewOutput | Error | null | undefined): ReviewVerdict {
+  if (!result || result instanceof Error) return "changes-requested";
+  const v = (result as ReviewOutput).verdict;
+  if (v === "pass" || v === "changes-requested") return v;
+  return "changes-requested";
 }
 
 function onTick(state: State): Action[] {
