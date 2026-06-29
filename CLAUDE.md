@@ -103,6 +103,18 @@ fallback). This is what cockpit mode depends on.
 - After each close, dependents are checked and labelled if now unblocked.
 - GitHub issues are the durable state — nothing is stored locally.
 
+### Sandbox retry semantics (#76)
+
+When a sandbox fails (throws or produces no commits) the orchestrator automatically
+re-labels the issue `ready-for-agent` so the next tick picks it up again, up to
+`Policy.maxRetries` times per run (default **2**). After the cap the issue is left
+unlabelled and a comment explains the exhaustion — never an infinite retry loop.
+
+**Known limitation:** attempt counts live in the orchestrator's in-run state and
+reset when the orchestrator restarts. A persistently-failing issue gets another
+`maxRetries` attempts on each fresh orchestrator run. In-run bounding is sufficient
+for v1; cross-run persistence is not implemented.
+
 ### Implementation approach
 
 Each implementation sub-agent uses `/tdd` (red → green → refactor) per acceptance criterion,

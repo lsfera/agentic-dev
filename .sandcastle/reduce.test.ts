@@ -1010,3 +1010,63 @@ test("resolveRunMode: any truthy value for AGENTIC_IN_CONTAINER → detached", (
   assert.equal(resolveRunMode({ AGENTIC_IN_CONTAINER: "true" }), "detached");
   assert.equal(resolveRunMode({ AGENTIC_IN_CONTAINER: "yes" }), "detached");
 });
+
+// ─── SandboxFailed retry gate ─────────────────────────────────────────────────
+
+test("SandboxFailed with attempts < maxRetries → Relabel(ready-for-agent)", () => {
+  const state = base({
+    failedAttempts: { 1: 0 },
+    policy: { concurrency: 1, mode: "afk", maxRetries: 2 },
+  });
+  assert.deepEqual(reduce(state, { type: "SandboxFailed", issue: 1 }), [
+    { type: "Relabel", issueId: 1, label: READY_LABEL },
+  ]);
+});
+
+test("SandboxFailed one attempt before cap also re-queues", () => {
+  const state = base({
+    failedAttempts: { 1: 1 },
+    policy: { concurrency: 1, mode: "afk", maxRetries: 2 },
+  });
+  assert.deepEqual(reduce(state, { type: "SandboxFailed", issue: 1 }), [
+    { type: "Relabel", issueId: 1, label: READY_LABEL },
+  ]);
+});
+
+test("SandboxFailed at the cap → Comment, no Relabel (no infinite loop)", () => {
+  const state = base({
+    failedAttempts: { 1: 2 },
+    policy: { concurrency: 1, mode: "afk", maxRetries: 2 },
+  });
+  const actions = reduce(state, { type: "SandboxFailed", issue: 1 });
+  assert.ok(!actions.some((a) => a.type === "Relabel"), "must not re-queue at the cap — no infinite loop");
+  assert.ok(actions.some((a) => a.type === "Comment"), "must emit exhaustion comment");
+});
+
+test("SandboxFailed with absent failedAttempts defaults to 0 → Relabel", () => {
+  // Existing tests pass base() without failedAttempts — must still work
+  const state = base();
+  const actions = reduce(state, { type: "SandboxFailed", issue: 99 });
+  assert.deepEqual(actions, [{ type: "Relabel", issueId: 99, label: READY_LABEL }]);
+});
+
+test("after SandboxFailed Relabel, re-labelled issue is picked up by next Tick", () => {
+  // Simulate: SandboxFailed emitted Relabel, orchestrator applied it; next Tick starts the issue
+  const stateAfterRelabel = base({
+    issues: [{ id: 1, labels: [READY_LABEL], blockedBy: [] }],
+    failedAttempts: { 1: 1 },
+  });
+  assert.deepEqual(reduce(stateAfterRelabel, { type: "Tick" }), [
+    { type: "StartSandbox", issueId: 1 },
+  ]);
+});
+
+test("SandboxFailed applies in hitl mode too (afk/hitl-agnostic)", () => {
+  const state = base({
+    failedAttempts: { 5: 0 },
+    policy: { concurrency: 1, mode: "hitl", maxRetries: 2 },
+  });
+  assert.deepEqual(reduce(state, { type: "SandboxFailed", issue: 5 }), [
+    { type: "Relabel", issueId: 5, label: READY_LABEL },
+  ]);
+});
