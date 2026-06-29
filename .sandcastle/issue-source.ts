@@ -6,9 +6,9 @@
  *
  * Runs inside the outer devcontainer, where `gh` is already authenticated.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { READY_LABEL, type Issue } from "./reduce.ts";
+import { READY_LABEL, type Issue, type ReviewOutput } from "./reduce.ts";
 
 const exec = promisify(execFile);
 
@@ -37,6 +37,24 @@ export class IssueSource {
   private gh(args: string[]) {
     const full = this.repo ? ["-R", this.repo, ...args] : args;
     return exec("gh", full, { maxBuffer: 16 * 1024 * 1024 });
+  }
+
+  private ghWithInput(args: string[], input: string): Promise<{ stdout: string }> {
+    return new Promise((resolve, reject) => {
+      const full = this.repo ? ["-R", this.repo, ...args] : args;
+      const child = spawn("gh", full, { stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on("close", (code: number | null) => {
+        if (code !== 0) reject(new Error(`gh exited ${code}: ${stderr}`));
+        else resolve({ stdout });
+      });
+      child.on("error", reject);
+      child.stdin.write(input);
+      child.stdin.end();
+    });
   }
 
   /** Open issues carrying the ready label, with dependency refs parsed from body. */
@@ -137,6 +155,53 @@ export class IssueSource {
 
   async comment(n: number, body: string): Promise<void> {
     await this.gh(["issue", "comment", String(n), "--body", body]);
+  }
+
+  /** Return the unified diff for the PR on the given issue's branch. */
+  async getPrDiff(issueId: number): Promise<string> {
+    const { stdout } = await this.gh(["pr", "diff", `agent/issue-${issueId}`]);
+    return stdout;
+  }
+
+  /**
+   * Post a REQUEST_CHANGES review on the PR for the given issue.
+   * Uses the GitHub API to attach the structured verdict + filtered inline comments.
+   * Best-effort: if inline-comment posting fails, falls back to a plain PR comment.
+   */
+  async postPrReview(issueId: number, output: ReviewOutput): Promise<void> {
+    const { stdout: prJson } = await this.gh([
+      "pr", "view", `agent/issue-${issueId}`,
+      "--json", "number,headRefOid",
+    ]);
+    const prInfo = JSON.parse(prJson) as { number: number; headRefOid: string };
+
+    const reviewBody = {
+      commit_id: prInfo.headRefOid,
+      event: "REQUEST_CHANGES",
+      body: output.summary,
+      comments: output.comments.map((c) => ({
+        path: c.path,
+        line: c.line,
+        side: "RIGHT",
+        body: c.body,
+      })),
+    };
+
+    try {
+      await this.ghWithInput(
+        ["api", `repos/{owner}/{repo}/pulls/${prInfo.number}/reviews`, "--method", "POST", "--input", "-"],
+        JSON.stringify(reviewBody),
+      );
+    } catch (err) {
+      // Inline comments may fail when lines are no longer in the diff; fall back to a
+      // plain top-level review without inline comments so the verdict is still visible.
+      console.warn(`[issue-source] inline review post failed — falling back to body-only review:`, err);
+      const bodyOnly = { ...reviewBody, comments: [] };
+      await this.ghWithInput(
+        ["api", `repos/{owner}/{repo}/pulls/${prInfo.number}/reviews`, "--method", "POST", "--input", "-"],
+        JSON.stringify(bodyOnly),
+      );
+    }
   }
 
   /** Open a PR for an already-pushed head branch. Returns the PR URL. */
