@@ -24,7 +24,7 @@ If the orchestrator is killed mid-flight, the in-memory `inFlight` is lost and t
 
 ## Startup reconcile (the point of the durability)
 
-- `agent:in-progress` found (no PR yet) → **re-queue** to `ready-for-agent`; the normal tick re-claims and starts fresh. `resetAgentBranch` (ADR-0011 / #23) already wipes the stale `agent/issue-N` branch.
+- `agent:in-progress` found (no PR yet) → **re-queue** to `ready-for-agent`; the normal tick re-claims and starts fresh. `resetAgentBranch` (#23) already wipes the stale `agent/issue-N` branch.
 - `agent:in-review` found (PR already open) → **re-run the read-only review** on the existing PR; do **not** re-queue (that would spawn a duplicate sandbox and a second PR) and do not leave it stuck (the pending-PR reconcile loop does not re-review). The reviewer is read-only and runs off the PR diff, so re-reviewing is idempotent.
 
 ## Considered and rejected
