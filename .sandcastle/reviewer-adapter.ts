@@ -109,6 +109,41 @@ export function filterInlineComments(
   return comments.filter((c) => diffLines.has(`${c.path}:${c.line}`));
 }
 
+/** Pass-1 (produce) run options returned by buildReviewerPassOneConfig. */
+export interface ReviewerPassOneConfig {
+  readonly promptFile: string;
+  readonly promptArgs: Record<string, string>;
+  readonly name: string;
+  // A review is a single-pass job: read diff → emit verdict → done.
+  // maxIterations: 1 prevents sandcastle re-invoking the agent toward a
+  // spurious second pass (observed at 8× in issue #80).
+  readonly maxIterations: 1;
+}
+
+/**
+ * Pure function: resolve ReviewerOptions + ReviewInput to the produce-pass
+ * run options — no Docker, no network. Mirrors buildAgentInput in
+ * sandbox-runner.ts; the caller wires in agent/sandbox/cwd before calling run().
+ */
+export function buildReviewerPassOneConfig(
+  opts: ReviewerOptions,
+  input: ReviewInput,
+): ReviewerPassOneConfig {
+  const baseBranch = opts.baseBranch ?? "main";
+  return {
+    promptFile: join(_dir, "review-prompt.md"),
+    promptArgs: {
+      ISSUE_NUMBER: String(input.issueNumber),
+      ISSUE_TITLE: input.issueTitle,
+      ISSUE_BODY: input.issueBody || "(no body)",
+      BRANCH: input.branch,
+      BASE_BRANCH: baseBranch,
+    },
+    name: `review-issue-${input.issueNumber}`,
+    maxIterations: 1,
+  };
+}
+
 export class ReviewerAdapter {
   private readonly opts: ReviewerOptions;
 
@@ -123,16 +158,9 @@ export class ReviewerAdapter {
    */
   async review(input: ReviewInput): Promise<ReviewOutput | null> {
     const model = this.opts.model ?? "claude-sonnet-4-6";
-    const baseBranch = this.opts.baseBranch ?? "main";
     const cwd = this.opts.cwd;
 
-    const promptArgs = {
-      ISSUE_NUMBER: String(input.issueNumber),
-      ISSUE_TITLE: input.issueTitle,
-      ISSUE_BODY: input.issueBody || "(no body)",
-      BRANCH: input.branch,
-      BASE_BRANCH: baseBranch,
-    };
+    const passOneConfig = buildReviewerPassOneConfig(this.opts, input);
 
     // Pass 1: produce — the reviewer reads the diff and forms a free-form review.
     let reviewResult;
@@ -141,10 +169,7 @@ export class ReviewerAdapter {
         agent: claudeCode(model, { permissionMode: "auto" }),
         sandbox: noSandbox(),
         cwd,
-        promptFile: join(_dir, "review-prompt.md"),
-        promptArgs,
-        name: `review-issue-${input.issueNumber}`,
-        maxIterations: 8,
+        ...passOneConfig,
       });
     } catch (err) {
       console.warn(`[reviewer] pass-1 (produce) failed for #${input.issueNumber}:`, err);
