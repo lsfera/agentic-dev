@@ -620,6 +620,9 @@ async function main(): Promise<void> {
   });
 
   const inFlight: number[] = [];
+  // Per-issue count of SandboxFailed events dispatched this run. Persists
+  // across ticks so the retry cap is enforced within a single orchestrator run.
+  const failedAttempts: Record<number, number> = {};
   // Issue ids whose PrMerged event has been dispatched to the reducer.
   // Synchronous check + add before the first await ensures concurrent smee
   // and reconciliation paths never double-dispatch the same merge.
@@ -760,13 +763,46 @@ async function main(): Promise<void> {
 
       void (async () => {
         let openedPr: Pr | null = null;
+        let sandboxFailed = false;
         try {
           openedPr = await processIssue(n, issues, runner, base, repoRoot, mode);
+          if (openedPr === null) {
+            sandboxFailed = true;
+            console.log(`[${mode}] #${n} sandbox produced no commits`);
+          }
         } catch (err) {
           console.error(`[${mode}] #${n} failed:`, err);
-          // Leave the issue claimed (label removed) for a human to inspect.
+          sandboxFailed = true;
         } finally {
           inFlight.splice(inFlight.indexOf(n), 1);
+        }
+
+        if (sandboxFailed) {
+          const attempts = failedAttempts[n] ?? 0;
+          const failState: State = { issues: ready, prs: allPrs, inFlight, policy, failedAttempts };
+          const failActions = reduce(failState, { type: "SandboxFailed", issue: n });
+          failedAttempts[n] = attempts + 1;
+          for (const action of failActions) {
+            if (action.type === "Relabel") {
+              console.log(
+                `[${mode}] #${n} failed — re-queuing for retry ` +
+                  `(${attempts + 1}/${policy.maxRetries ?? 2})`,
+              );
+              try {
+                await withRetry(() => issues.addLabel(n, action.label), { label: `addLabel #${n}` });
+              } catch (err) {
+                console.error(`[${mode}] #${n} could not re-queue:`, err);
+              }
+            }
+            if (action.type === "Comment") {
+              console.log(`[${mode}] #${n} retries exhausted after ${attempts + 1} failures`);
+              try {
+                await issues.comment(n, action.body);
+              } catch (err) {
+                console.error(`[${mode}] #${n} could not post exhaustion comment:`, err);
+              }
+            }
+          }
         }
 
         if (openedPr) {
@@ -877,14 +913,6 @@ async function processIssue(
   );
 
   if (outcome.commits.length === 0) {
-    // Leave the issue claimed (label stays off) so the poll loop does not
-    // re-pick a persistently-failing issue every tick. A human re-labels it
-    // after inspecting. (Automated backoff/retry is later work, not slice 1.)
-    await issues.comment(
-      n,
-      "AFK agent produced no commits — leaving this issue unlabelled for a " +
-        "human to inspect and re-label `ready-for-agent` if appropriate.",
-    );
     return null;
   }
 

@@ -56,6 +56,8 @@ export type Mode = "afk" | "hitl";
 export interface Policy {
   readonly concurrency: number;
   readonly mode: Mode;
+  /** Maximum retries per issue within a single orchestrator run (default 2). */
+  readonly maxRetries?: number;
 }
 
 export interface State {
@@ -64,6 +66,8 @@ export interface State {
   readonly policy: Policy;
   /** Issue ids whose sandbox is currently running. */
   readonly inFlight: number[];
+  /** Per-issue count of SandboxFailed events dispatched this run (default {}). */
+  readonly failedAttempts?: Record<number, number>;
 }
 
 export type Event =
@@ -79,6 +83,7 @@ export type Action =
   | { type: "EnableAutoMerge"; pr: Pr }
   | { type: "Relabel"; issueId: number; label: string }
   | { type: "WaitForHuman"; pr: Pr }
+  | { type: "Comment"; issueId: number; body: string }
   | { type: "Stop" };
 
 export function reduce(state: State, event: Event): Action[] {
@@ -91,9 +96,8 @@ export function reduce(state: State, event: Event): Action[] {
       return onSandboxFinished(state, event);
     case "ReviewFinished":
       return onReviewFinished(event);
-    // SandboxFailed lands in a later slice.
-    default:
-      return [];
+    case "SandboxFailed":
+      return onSandboxFailed(state, event);
   }
 }
 
@@ -141,6 +145,22 @@ function onReviewFinished(event: { issue: number; pr: Pr; verdict: ReviewVerdict
     return [{ type: "EnableAutoMerge", pr: event.pr }];
   }
   return [{ type: "WaitForHuman", pr: event.pr }];
+}
+
+function onSandboxFailed(state: State, event: { issue: number }): Action[] {
+  const maxRetries = state.policy.maxRetries ?? 2;
+  const attempts = (state.failedAttempts ?? {})[event.issue] ?? 0;
+  if (attempts < maxRetries) {
+    return [{ type: "Relabel", issueId: event.issue, label: READY_LABEL }];
+  }
+  return [{
+    type: "Comment",
+    issueId: event.issue,
+    body:
+      `AFK agent failed ${attempts + 1} times (retry limit: ${maxRetries}) — ` +
+      `leaving this issue unlabelled for a human to inspect and re-label ` +
+      `\`ready-for-agent\` if appropriate.`,
+  }];
 }
 
 /**
