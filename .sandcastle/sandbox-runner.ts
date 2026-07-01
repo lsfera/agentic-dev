@@ -23,9 +23,10 @@
  * deterministic teardown; in-sandbox setup is declared via hooks.onSandboxReady;
  * agent prompts are .md templates resolved by promptFile + promptArgs.
  */
-import { createSandbox, claudeCode, opencode, type AgentProvider, type PromptArgs, type PromptCompression } from "@ai-hero/sandcastle";
+import { createSandbox, claudeCode, opencode, type AgentProvider, type PromptArgs } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { getCompressionCallback } from "./context-compressor.js";
 import { fileURLToPath } from "node:url";
 
@@ -190,15 +191,35 @@ export class SandboxRunner {
     // Resolve compression callback once (off by default — set HEADROOM_MODE=conservative or aggressive to enable).
     const compression = getCompressionCallback();
 
-    const result = await sandbox.run({
-      agent: agentInput.agent,
-      name: `issue-${issue.number}`,
-      maxIterations: this.opts.maxIterations ?? 12,
-      completionSignal: COMPLETION_SIGNAL,
-      promptFile: agentInput.promptFile,
-      promptArgs: agentInput.promptArgs,
-      ...(compression ? { promptCompression: compression } : {}),
-    });
+    let runResult;
+    if (compression) {
+      // Pre-read template, resolve args, compress — outside sandcastle's Effect generators.
+      const raw = await readFile(agentInput.promptFile, "utf8");
+      let text = raw;
+      for (const [key, value] of Object.entries(agentInput.promptArgs)) {
+        text = text.replaceAll(`{{${key}}}`, String(value));
+      }
+      const compressed = await compression(text);
+
+      runResult = await sandbox.run({
+        agent: agentInput.agent,
+        name: `issue-${issue.number}`,
+        maxIterations: this.opts.maxIterations ?? 12,
+        completionSignal: COMPLETION_SIGNAL,
+        prompt: compressed,
+      });
+    } else {
+      runResult = await sandbox.run({
+        agent: agentInput.agent,
+        name: `issue-${issue.number}`,
+        maxIterations: this.opts.maxIterations ?? 12,
+        completionSignal: COMPLETION_SIGNAL,
+        promptFile: agentInput.promptFile,
+        promptArgs: agentInput.promptArgs,
+      });
+    }
+
+    const result = runResult;
 
     return {
       branch: sandbox.branch,

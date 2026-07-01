@@ -19,6 +19,7 @@
 import { run, claudeCode, Output, StructuredOutputError } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { reviewVerdict, type ReviewOutput, type ReviewVerdict } from "./reduce.ts";
 import { getCompressionCallback } from "./context-compressor.js";
@@ -189,13 +190,29 @@ export class ReviewerAdapter {
     // Pass 1: produce — the reviewer reads the diff and forms a free-form review.
     let reviewResult;
     try {
-      reviewResult = await run({
-        agent: claudeCode(model, { permissionMode: "auto" }),
-        sandbox: noSandbox(),
-        cwd,
-        ...passOneConfig,
-        ...(compression ? { promptCompression: compression } : {}),
-      });
+      // Pre-read template, resolve args, optionally compress — outside sandcastle's Effect generators.
+      if (compression) {
+        const raw = await readFile(join(_dir, "review-prompt.md"), "utf8");
+        let text = raw;
+        for (const [key, value] of Object.entries(passOneConfig.promptArgs)) {
+          text = text.replaceAll(`{{${key}}}`, String(value));
+        }
+        const compressed = await compression(text);
+
+        reviewResult = await run({
+          agent: claudeCode(model, { permissionMode: "auto" }),
+          sandbox: noSandbox(),
+          cwd,
+          prompt: compressed,
+        });
+      } else {
+        reviewResult = await run({
+          agent: claudeCode(model, { permissionMode: "auto" }),
+          sandbox: noSandbox(),
+          cwd,
+          ...passOneConfig,
+        });
+      }
     } catch (err) {
       console.warn(`[reviewer] pass-1 (produce) failed for #${input.issueNumber}:`, err);
       return null;
@@ -209,24 +226,42 @@ export class ReviewerAdapter {
 
     // Pass 2: extract — resume the session and ask for the structured output block.
     try {
-      const extractResult = reviewResult.resume
-        ? await reviewResult.resume(
-            await loadPromptFile(join(_dir, "review-extraction.md")),
-            {
+      let extractResult;
+      if (compression) {
+        const raw = await loadPromptFile(passTwoConfig.promptFile);
+        const compressed = await compression(raw);
+
+        extractResult = reviewResult.resume
+          ? await reviewResult.resume(compressed, {
               output: Output.object({ tag: "output", schema: reviewOutputSchema }),
               cwd,
-              ...(compression ? { promptCompression: compression } : {}),
-            },
-          )
-        : await run({
-            agent: claudeCode(model, { permissionMode: "auto" }),
-            sandbox: noSandbox(),
-            cwd,
-            promptFile: passTwoConfig.promptFile,
-            output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-            name: passTwoConfig.name,
-            ...(compression ? { promptCompression: compression } : {}),
-          });
+            })
+          : await run({
+              agent: claudeCode(model, { permissionMode: "auto" }),
+              sandbox: noSandbox(),
+              cwd,
+              prompt: compressed,
+              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
+              name: passTwoConfig.name,
+            });
+      } else {
+        extractResult = reviewResult.resume
+          ? await reviewResult.resume(
+              await loadPromptFile(join(_dir, "review-extraction.md")),
+              {
+                output: Output.object({ tag: "output", schema: reviewOutputSchema }),
+                cwd,
+              },
+            )
+          : await run({
+              agent: claudeCode(model, { permissionMode: "auto" }),
+              sandbox: noSandbox(),
+              cwd,
+              promptFile: passTwoConfig.promptFile,
+              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
+              name: passTwoConfig.name,
+            });
+      }
 
       return (extractResult as typeof extractResult & { output: ReviewOutput }).output;
     } catch (err) {

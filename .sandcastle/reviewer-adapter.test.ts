@@ -77,7 +77,7 @@ test("extraction pass has no promptArgs — only promptFile is needed", () => {
 });
 
 test("extraction pass is independent of input beyond issue number", () => {
-  const fullInput = { ...STUB_INPUT, issueTitle: "A very long title with many words and special chars @#$%", issueBody: "extremely detailed body".repeat(50), branch: "agent/issue-99" };
+  const fullInput = { ...STUB_INPUT, issueNumber: 99, issueTitle: "A very long title with many words and special chars @#$%", issueBody: "extremely detailed body".repeat(50), branch: "agent/issue-99" };
   const config = buildReviewerPassTwoConfig(fullInput);
   assert.ok(config.name.includes("99"), `expected name to include issue number 99, got ${config.name}`);
 });
