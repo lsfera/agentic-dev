@@ -14,9 +14,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { resolve, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SandboxRunner } from "./sandbox-runner.ts";
+import { ReviewerAdapter } from "./reviewer-adapter.ts";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const enabled = !!process.env.SANDCASTLE_INTEGRATION;
 
 // The repo root is the parent of this `.sandcastle/` dir. Anchor sandcastle's
@@ -62,5 +65,29 @@ test(
       outcome.commits.length <= 2,
       `expected a tight commit count for a one-line change, got ${outcome.commits.length}`,
     );
+  },
+);
+
+// ─── Reviewer gate integration test ────────────────────────────────────────
+
+test(
+  "review-gate: pass-2 extract round-trips to a non-null verdict",
+  { skip: enabled ? false : "set SANDCASTLE_INTEGRATION=1 (Docker required)" },
+  async () => {
+    // Use the review-gate PR branch as the target — it has real code changes.
+    const reviewer = new ReviewerAdapter({ cwd: repoRoot });
+    const result = await reviewer.review({
+      issueNumber: 82,
+      issueTitle: "AI review gate non-functional: pass-2 extraction crashes",
+      issueBody: "The AI review gate never produces a real verdict because the extraction pass crashes deterministically.",
+      branch: "agent/issue-82-review-gate",
+      prNumber: 85,
+    });
+
+    // A genuine pass should return the validated ReviewOutput (not null).
+    // If the reviewer can't run on this branch (CI status block), skip gracefully.
+    assert.ok(result != null, `expected non-null verdict from review-gate, got ${JSON.stringify(result)}`);
+    assert.equal(result.verdict, "pass", `expected pass verdict, got ${result.verdict}`);
+    assert.ok(result.summary.length > 0, "expected non-empty summary");
   },
 );

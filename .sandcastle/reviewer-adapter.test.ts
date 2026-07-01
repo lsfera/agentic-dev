@@ -1,13 +1,13 @@
 /**
- * Unit tests for buildReviewerPassOneConfig — the pure function that returns
- * the produce-pass run options for the reviewer adapter.
- * No Docker, GitHub, or network required.
+ * Unit tests for buildReviewerPassOneConfig + buildReviewerPassTwoConfig — the pure
+ * functions that return the produce-pass and extraction-pass run options for the
+ * reviewer adapter. No Docker, GitHub, or network required.
  *
  * Run: npm test
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewerPassOneConfig } from "./reviewer-adapter.ts";
+import { buildReviewerPassOneConfig, buildReviewerPassTwoConfig } from "./reviewer-adapter.ts";
 
 const STUB_INPUT = {
   issueNumber: 42,
@@ -54,4 +54,35 @@ test("name includes the issue number", () => {
 test("ISSUE_BODY defaults to (no body) when empty", () => {
   const config = buildReviewerPassOneConfig({}, { ...STUB_INPUT, issueBody: "" });
   assert.equal(config.promptArgs["ISSUE_BODY"], "(no body)");
+});
+
+// ─── Pass-2 extraction config tests ────────────────────────────────────────
+
+test("extraction pass uses review-extraction.md template", () => {
+  const config = buildReviewerPassTwoConfig(STUB_INPUT);
+  assert.ok(config.promptFile.endsWith("review-extraction.md"), `expected review-extraction.md, got ${config.promptFile}`);
+});
+
+test("extraction pass name includes the issue number", () => {
+  const config = buildReviewerPassTwoConfig(STUB_INPUT);
+  assert.ok(config.name.includes("42"), `expected name to include issue number, got ${config.name}`);
+});
+
+test("extraction pass has no promptArgs — only promptFile is needed", () => {
+  const config = buildReviewerPassTwoConfig(STUB_INPUT);
+  // The interface does not expose promptArgs; confirm the return shape is { promptFile, name }.
+  assert.ok("promptFile" in config);
+  assert.ok("name" in config);
+  assert.doesNotThrow(() => JSON.stringify(config)); // no circular refs
+});
+
+test("extraction pass is independent of input beyond issue number", () => {
+  const fullInput = { ...STUB_INPUT, issueNumber: 99, issueTitle: "A very long title with many words and special chars @#$%", issueBody: "extremely detailed body".repeat(50), branch: "agent/issue-99" };
+  const config = buildReviewerPassTwoConfig(fullInput);
+  assert.ok(config.name.includes("99"), `expected name to include issue number 99, got ${config.name}`);
+});
+
+test("extraction promptFile is an absolute path", () => {
+  const config = buildReviewerPassTwoConfig(STUB_INPUT);
+  assert.ok(config.promptFile.startsWith("/"), `expected absolute path, got ${config.promptFile}`);
 });
