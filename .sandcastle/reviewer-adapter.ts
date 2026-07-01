@@ -21,6 +21,7 @@ import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { reviewVerdict, type ReviewOutput, type ReviewVerdict } from "./reduce.ts";
+import { getCompressionCallback } from "./context-compressor.js";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 
@@ -120,6 +121,14 @@ export interface ReviewerPassOneConfig {
   readonly maxIterations: 1;
 }
 
+/** Pass-2 (extract) run options returned by buildReviewerPassTwoConfig. */
+export interface ReviewerPassTwoConfig {
+  /** The extraction prompt file path — review-extraction.md with no {{KEY}} placeholders. */
+  readonly promptFile: string;
+  /** No args needed: review-extraction.md has zero template keys. */
+  readonly name: string;
+}
+
 /**
  * Pure function: resolve ReviewerOptions + ReviewInput to the produce-pass
  * run options — no Docker, no network. Mirrors buildAgentInput in
@@ -144,6 +153,20 @@ export function buildReviewerPassOneConfig(
   };
 }
 
+/**
+ * Pure function: resolve the extraction-pass run options — no Docker, no network.
+ * Mirrors buildReviewerPassOneConfig from #80. The extraction template has zero
+ * {{KEY}} placeholders so promptArgs are not needed (and would conflict with inline
+ * prompts per sandcastle's constraint). The caller wires in agent/sandbox/cwd/output
+ * before calling run().
+ */
+export function buildReviewerPassTwoConfig(input: ReviewInput): ReviewerPassTwoConfig {
+  return {
+    promptFile: join(_dir, "review-extraction.md"),
+    name: `review-extract-${input.issueNumber}`,
+  };
+}
+
 export class ReviewerAdapter {
   private readonly opts: ReviewerOptions;
 
@@ -161,6 +184,7 @@ export class ReviewerAdapter {
     const cwd = this.opts.cwd;
 
     const passOneConfig = buildReviewerPassOneConfig(this.opts, input);
+    const compression = getCompressionCallback();
 
     // Pass 1: produce — the reviewer reads the diff and forms a free-form review.
     let reviewResult;
@@ -170,14 +194,17 @@ export class ReviewerAdapter {
         sandbox: noSandbox(),
         cwd,
         ...passOneConfig,
+        ...(compression ? { promptCompression: compression } : {}),
       });
     } catch (err) {
       console.warn(`[reviewer] pass-1 (produce) failed for #${input.issueNumber}:`, err);
       return null;
     }
 
+    const passTwoConfig = buildReviewerPassTwoConfig(input);
+
     if (!reviewResult.resume) {
-      console.warn(`[reviewer] resume not available after pass-1 for #${input.issueNumber} — using pass-1 stdout for extraction`);
+      console.warn(`[reviewer] resume not available after pass-1 for #${input.issueNumber} — using fresh run for extraction`);
     }
 
     // Pass 2: extract — resume the session and ask for the structured output block.
@@ -188,15 +215,17 @@ export class ReviewerAdapter {
             {
               output: Output.object({ tag: "output", schema: reviewOutputSchema }),
               cwd,
+              ...(compression ? { promptCompression: compression } : {}),
             },
           )
         : await run({
             agent: claudeCode(model, { permissionMode: "auto" }),
             sandbox: noSandbox(),
             cwd,
-            promptFile: join(_dir, "review-extraction.md"),
+            promptFile: passTwoConfig.promptFile,
             output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-            name: `review-extract-${input.issueNumber}`,
+            name: passTwoConfig.name,
+            ...(compression ? { promptCompression: compression } : {}),
           });
 
       return (extractResult as typeof extractResult & { output: ReviewOutput }).output;

@@ -23,9 +23,10 @@
  * deterministic teardown; in-sandbox setup is declared via hooks.onSandboxReady;
  * agent prompts are .md templates resolved by promptFile + promptArgs.
  */
-import { createSandbox, claudeCode, opencode, type AgentProvider, type PromptArgs } from "@ai-hero/sandcastle";
+import { createSandbox, claudeCode, opencode, type AgentProvider, type PromptArgs, type PromptCompression } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { dirname, join } from "node:path";
+import { getCompressionCallback } from "./context-compressor.js";
 import { fileURLToPath } from "node:url";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
@@ -186,6 +187,9 @@ export class SandboxRunner {
         : undefined,
     });
 
+    // Resolve compression callback once (off by default — set HEADROOM_MODE=conservative or aggressive to enable).
+    const compression = getCompressionCallback();
+
     const result = await sandbox.run({
       agent: agentInput.agent,
       name: `issue-${issue.number}`,
@@ -193,6 +197,7 @@ export class SandboxRunner {
       completionSignal: COMPLETION_SIGNAL,
       promptFile: agentInput.promptFile,
       promptArgs: agentInput.promptArgs,
+      ...(compression ? { promptCompression: compression } : {}),
     });
 
     return {

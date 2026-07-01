@@ -1,0 +1,100 @@
+diff --git a/node_modules/@ai-hero/sandcastle/dist/index.d.ts b/node_modules/@ai-hero/sandcastle/dist/index.d.ts
+index e6b1b0d..3c40e71 100644
+--- a/node_modules/@ai-hero/sandcastle/dist/index.d.ts
++++ b/node_modules/@ai-hero/sandcastle/dist/index.d.ts
+@@ -308,6 +308,15 @@ interface IterationResult {
+  */
+ type PromptArgs = Record<string, string | number | boolean>;
+ 
++/**
++ * Prompt compression callback — invoked after prompt file resolution and {{KEY}}
++ * argument substitution, returning compressed text before the prompt reaches the agent.
++ * The callback must return valid (possibly compressed) text that the agent can parse;
++ * Sandcastle does not validate it. Useful for integrating with headroom-ai or other
++ * compression layers: `promptCompression: (prompt) => compress(prompt).compressed`.
++ */
++type PromptCompression = (prompt: string) => string | Promise<string>;
++
+ /** Branded output definition for `Output.object({ tag, schema })`. */
+ interface OutputObjectDefinition<T> {
+     readonly _tag: "object";
+@@ -551,6 +560,12 @@ interface RunOptions<A extends AgentProvider = AgentProvider> {
+      * See ADR 0010 for design rationale.
+      */
+     readonly output?: OutputDefinition;
++    /**
++     * Prompt compression callback invoked after {{KEY}} argument substitution,
++     * before the prompt reaches the agent. Return compressed text that the agent
++     * can still parse. Useful for integrating with headroom-ai or other layers.
++     */
++    readonly promptCompression?: PromptCompression;
+ }
+ 
+ type ResumeRunResultOptions = Omit<RunOptions, "agent" | "sandbox" | "prompt" | "promptFile" | "resumeSession" | "forkSession" | "maxIterations">;
+@@ -729,6 +744,11 @@ interface SandboxRunOptions {
+      *   with a fresh signal, or `.close()` to tear down.
+      */
+     readonly signal?: AbortSignal;
++    /**
++     * Prompt compression callback invoked after {{KEY}} substitution, before the
++     * prompt reaches the agent. Return compressed text that the agent can still parse.
++     */
++    readonly promptCompression?: PromptCompression;
+ }
+ interface SandboxRunResult {
+     /** Per-iteration results (use `iterations.length` for the count). */
+@@ -888,6 +908,11 @@ interface WorktreeRunOptions {
+      * - The `Worktree` handle remains usable for subsequent operations.
+      */
+     readonly signal?: AbortSignal;
++    /**
++     * Prompt compression callback invoked after {{KEY}} substitution, before the
++     * prompt reaches the agent. Return compressed text that the agent can still parse.
++     */
++    readonly promptCompression?: PromptCompression;
+ }
+ interface WorktreeRunResult {
+     /** Per-iteration results (use `iterations.length` for the count). */
+@@ -963,4 +988,4 @@ interface CwdError extends Error {
+ /** The provided `cwd` path does not exist or is not a directory. */
+ declare const CwdError: CwdErrorConstructor;
+ 
+-export { type AgentCommandOptions, type AgentProvider, type AgentStreamEvent, AnySandboxProvider, BindMountSandboxHandle, BranchStrategy, type ClaudeCodeOptions, type CloseResult, type CodexOptions, type CopilotOptions, type CreateSandboxOptions, type CreateWorktreeOptions, type CursorOptions, CwdError, type HostSessionLookup, type InteractiveOptions, type InteractiveResult, type IterationResult, type IterationUsage, type LoggingOption, MergeToHeadBranchStrategy, NamedBranchStrategy, type OpenCodeOptions, Output, type OutputDefinition, type OutputObjectDefinition, type OutputStringDefinition, type PiOptions, type PrintCommand, type PromptArgs, type RunOptions, type RunResult, type Sandbox, type SandboxHooks, type SandboxInteractiveOptions, type SandboxInteractiveResult, SandboxProvider, type SandboxRunOptions, type SandboxRunResult, StructuredOutputError, type Timeouts, type Worktree, type WorktreeBranchStrategy, type WorktreeCreateSandboxOptions, type WorktreeInteractiveOptions, type WorktreeRunOptions, type WorktreeRunResult, claudeCode, claudeHostSessionPath, claudeSandboxSessionPath, codex, copilot, createSandbox, createWorktree, cursor, encodeProjectPath, findClaudeSessionOnHost, findCodexSessionOnHost, interactive, opencode, pi, run, transferClaudeSession, transferCodexSession };
++export { type AgentCommandOptions, type AgentProvider, type AgentStreamEvent, AnySandboxProvider, BindMountSandboxHandle, BranchStrategy, type ClaudeCodeOptions, type CloseResult, type CodexOptions, type CopilotOptions, type CreateSandboxOptions, type CreateWorktreeOptions, type CursorOptions, CwdError, type HostSessionLookup, type InteractiveOptions, type InteractiveResult, type IterationResult, type IterationUsage, type LoggingOption, MergeToHeadBranchStrategy, NamedBranchStrategy, type OpenCodeOptions, Output, type OutputDefinition, type OutputObjectDefinition, type OutputStringDefinition, type PiOptions, type PrintCommand, type PromptArgs, type PromptCompression, type RunOptions, type RunResult, type Sandbox, type SandboxHooks, type SandboxInteractiveOptions, type SandboxInteractiveResult, SandboxProvider, type SandboxRunOptions, type SandboxRunResult, StructuredOutputError, type Timeouts, type Worktree, type WorktreeBranchStrategy, type WorktreeCreateSandboxOptions, type WorktreeInteractiveOptions, type WorktreeRunOptions, type WorktreeRunResult, claudeCode, claudeHostSessionPath, claudeSandboxSessionPath, codex, copilot, createSandbox, createWorktree, cursor, encodeProjectPath, findClaudeSessionOnHost, findCodexSessionOnHost, interactive, opencode, pi, run, transferClaudeSession, transferCodexSession };
+diff --git a/node_modules/@ai-hero/sandcastle/dist/index.js b/node_modules/@ai-hero/sandcastle/dist/index.js
+index 3a27c66..5e3915c 100644
+--- a/node_modules/@ai-hero/sandcastle/dist/index.js
++++ b/node_modules/@ai-hero/sandcastle/dist/index.js
+@@ -1100,6 +1100,10 @@ async function run(options) {
+         builtInArgKeysSet
+       );
+     }
++    // Prompt compression (if configured): compress after substitution, before reaching the agent.
++    if (options.promptCompression && typeof options.promptCompression === "function") {
++      resolvedPrompt = await Promise.resolve(options.promptCompression(resolvedPrompt));
++    }
+     const orchestrateBranch = effectiveBranchType === "head" ? currentHostBranch : branch;
+     const orchestrateResult = yield* orchestrate({
+       hostRepoDir,
+@@ -1539,6 +1543,10 @@ var buildSandboxHandle = (ctx, close) => {
+           );
+         }).pipe(Effect_exports.provide(silentDisplayLayer))
+       );
++      // Prompt compression (if configured): compress after substitution, before reaching the agent.
++      if (runOptions.promptCompression && typeof runOptions.promptCompression === "function") {
++        resolvedPrompt = await Promise.resolve(runOptions.promptCompression(resolvedPrompt));
++      }
+       const resolvedLogging = runOptions.logging ?? {
+         type: "file",
+         path: join(
+@@ -2283,6 +2291,10 @@ var createWorktree = async (options) => {
+           builtInArgKeysSet
+         );
+       }
++      // Prompt compression (if configured): compress after substitution, before reaching the agent.
++      if (opts.promptCompression && typeof opts.promptCompression === "function") {
++        resolvedPrompt = await Promise.resolve(opts.promptCompression(resolvedPrompt));
++      }
+       let handle;
+       let sandboxRepoDir;
+       if (sandboxProvider.tag === "isolated") {
