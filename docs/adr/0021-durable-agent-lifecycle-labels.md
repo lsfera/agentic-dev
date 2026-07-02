@@ -1,5 +1,7 @@
 # Durable agent lifecycle labels
 
+**Status: Accepted**
+
 Two GitHub labels — `agent:in-progress` and `agent:in-review` — mark the two work-item lifecycle phases that otherwise leave no durable artifact on GitHub: a sandbox actively implementing an issue, and the AI reviewer (ADR-0020) running on an open PR. They make the orchestrator's in-flight state **durable for crash recovery**: `State.inFlight` stays the runtime source of truth, and the labels are a mirror written at each transition and read only at startup to reconcile work a crashed predecessor left mid-flight.
 
 ## Why
