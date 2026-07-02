@@ -82,9 +82,38 @@ services:
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Context compression (headroom-ai, .sandcastle/context-compressor.ts) — off
+      # by default (HEADROOM_MODE=off). HEADROOM_BASE_URL defaults to the sibling
+      # `headroom` service below (opt-in via `--profile headroom`, since most runs
+      # never touch this); override to point at Headroom Cloud instead. Without
+      # HEADROOM_MODE set to conservative/aggressive none of this is consulted.
+      HEADROOM_MODE: ${HEADROOM_MODE:-}
+      HEADROOM_MODEL: ${HEADROOM_MODEL:-}
+      HEADROOM_BASE_URL: ${HEADROOM_BASE_URL:-http://headroom:8787}
+      HEADROOM_API_KEY: ${HEADROOM_API_KEY:-}
 
     working_dir: ${WORKSPACE_FOLDER:-/workspace}
     command: sleep infinity
+
+  # Headroom compression proxy (opt-in: `docker compose --profile headroom up`).
+  # context-compressor.ts calls compress(), which defaults to POSTing to
+  # http://localhost:8787/v1/compress (headroom-ai's own DEFAULT_BASE_URL) — this
+  # service provides that locally instead of requiring Headroom Cloud. Profiled
+  # rather than always-on because HEADROOM_MODE defaults to "off": most runs never
+  # touch it, and pulling+running an idle container for everyone isn't worth it.
+  # Image per https://headroomlabs-ai.github.io/headroom/docker-install/.
+  # Needs its own LLM credential to actually perform compression (it calls the
+  # model, e.g. claude-sonnet-4-6, itself) — CLAUDE_CODE_OAUTH_TOKEN (subscription,
+  # ADR-0003) does NOT work here, only an API key. A user relying purely on the
+  # subscription token has no key to give it; compression will fail to configure
+  # and headroom-ai's client-side fallback (compressed: false) keeps prompts
+  # uncompressed rather than blocking the run.
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    profiles: ["headroom"]
+    command: ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
 networks:
   # Rename Compose's default network from "<project>_default" to a fixed,
