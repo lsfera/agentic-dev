@@ -10,6 +10,9 @@ ws/
 .sandcastle/logs/
 .sandcastle/worktrees/
 
+# Local issue-tracker scratch files (docs/agents/issue-tracker.md)
+.scratch/
+
 # Node
 node_modules/
 
