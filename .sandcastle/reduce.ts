@@ -138,10 +138,17 @@ function onPrMerged(state: State, mergedPr: Pr): Action[] {
 
 function onSandboxFinished(state: State, event: { issue: number; pr: Pr }): Action[] {
   if (state.policy.mode === "afk") {
+    // Label actions come BEFORE StartReview: main.ts processes this array in
+    // order, and StartReview's handling awaits the full review inline (an LLM
+    // call) before moving to the next action — so if the labels were emitted
+    // after StartReview, agent:in-review would never become durable during
+    // the review itself, defeating the crash-recovery this label exists for
+    // (ADR-0021), and would only get attached once the review had already
+    // finished.
     return [
-      { type: "StartReview", pr: event.pr },
       { type: "RemoveLabel", issueId: event.issue, label: IN_PROGRESS_LABEL },
       { type: "Relabel", issueId: event.issue, label: IN_REVIEW_LABEL },
+      { type: "StartReview", pr: event.pr },
     ];
   }
   return [

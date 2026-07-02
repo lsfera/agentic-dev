@@ -214,13 +214,16 @@ test("PrMerged unblocks all fully-resolved dependents in one call", () => {
 
 // ─── SandboxFinished / EnableAutoMerge / WaitForHuman ───────────────────────
 
-test("afk mode + SandboxFinished → StartReview + label transition in-progress→in-review", () => {
+test("afk mode + SandboxFinished → label transition in-progress→in-review BEFORE StartReview", () => {
+  // Order matters: main.ts processes this array sequentially and StartReview's
+  // handling awaits the full review inline, so the label actions must come
+  // first for agent:in-review to be durable during the review (ADR-0021).
   const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
   const state = base({ policy: { concurrency: 1, mode: "afk" } });
   assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
-    { type: "StartReview", pr },
     { type: "RemoveLabel", issueId: 1, label: IN_PROGRESS_LABEL },
     { type: "Relabel", issueId: 1, label: IN_REVIEW_LABEL },
+    { type: "StartReview", pr },
   ]);
 });
 
