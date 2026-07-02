@@ -204,6 +204,8 @@ export class ReviewerAdapter {
           sandbox: noSandbox(),
           cwd,
           prompt: compressed,
+          name: passOneConfig.name,
+          maxIterations: passOneConfig.maxIterations,
         });
       } else {
         reviewResult = await run({

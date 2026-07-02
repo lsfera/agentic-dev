@@ -157,6 +157,53 @@ export class IssueSource {
     await this.gh(["issue", "comment", String(n), "--body", body]);
   }
 
+  /**
+   * Find the open issue carrying `label`, or null if none exists. Used for
+   * label-discovered singleton issues (e.g. the pinned memory issue, #22).
+   * If a create-race ever produces more than one, the lowest-numbered issue
+   * is treated as canonical and the duplicate is left for a human to close —
+   * detect-and-converge rather than locking (ADR-0022).
+   */
+  async findIssueByLabel(label: string): Promise<{ number: number } | null> {
+    const { stdout } = await this.gh([
+      "issue", "list",
+      "--state", "open",
+      "--label", label,
+      "--json", "number",
+      "--limit", "50",
+    ]);
+    const raw = JSON.parse(stdout) as { number: number }[];
+    if (raw.length === 0) return null;
+    const number = Math.min(...raw.map((r) => r.number));
+    if (raw.length > 1) {
+      console.warn(
+        `[issue-source] multiple open issues carry label '${label}' — using the oldest (#${number})`,
+      );
+    }
+    return { number };
+  }
+
+  /** Create a new issue with the given labels. Returns the new issue number. */
+  async createIssue(opts: { title: string; body: string; labels: string[] }): Promise<number> {
+    const { stdout } = await this.gh([
+      "issue", "create",
+      "--title", opts.title,
+      "--body", opts.body,
+      ...opts.labels.flatMap((label) => ["--label", label]),
+    ]);
+    const url = stdout.trim();
+    const match = url.match(/\/issues\/(\d+)/);
+    if (!match) throw new Error(`could not parse issue number from gh output: ${url}`);
+    return parseInt(match[1], 10);
+  }
+
+  /** All comment bodies on an issue, oldest first (as GitHub returns them). */
+  async listComments(n: number): Promise<string[]> {
+    const { stdout } = await this.gh(["issue", "view", String(n), "--json", "comments"]);
+    const raw = JSON.parse(stdout) as { comments: { body: string }[] };
+    return raw.comments.map((c) => c.body);
+  }
+
   /** Return the unified diff for the PR on the given issue's branch. */
   async getPrDiff(issueId: number): Promise<string> {
     const { stdout } = await this.gh(["pr", "diff", `agent/issue-${issueId}`]);

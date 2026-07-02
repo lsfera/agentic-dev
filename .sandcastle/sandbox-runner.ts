@@ -63,6 +63,11 @@ export interface SandboxOutcome {
   /** Whether the completion signal fired (vs. hitting the iteration cap). */
   readonly completed: boolean;
   readonly logFilePath?: string;
+  /** Combined agent stdout across all iterations — scanned by the caller for
+   *  optional <repo-convention>/<gotcha> memory tags (ADR-0022, memory.ts's
+   *  parseMemoryTags). Kept here rather than in sandbox-runner.ts itself so
+   *  this module stays free of GitHub I/O. */
+  readonly stdout: string;
 }
 
 export interface RunnerOptions {
@@ -123,12 +128,20 @@ export interface IssueInput {
 }
 
 /** Pure function: resolve RunnerOptions + IssueInput to the per-tier agent
- *  config, including the prompt template path and substitution args. */
-export function buildAgentInput(opts: RunnerOptions, issue: IssueInput): AgentInput {
+ *  config, including the prompt template path and substitution args.
+ *  `memoryContext` (ADR-0022) is the caller-retrieved {{MEMORY_CONTEXT}}
+ *  rendering — this function stays free of GitHub I/O, matching the existing
+ *  pure-reducer/impure-adapter split (memory-store.ts owns the retrieval). */
+export function buildAgentInput(
+  opts: RunnerOptions,
+  issue: IssueInput,
+  memoryContext?: string,
+): AgentInput {
   const promptArgs: PromptArgs = {
     ISSUE_NUMBER: String(issue.number),
     ISSUE_TITLE: issue.title,
     ISSUE_BODY: issue.body || "(no body)",
+    MEMORY_CONTEXT: memoryContext ?? "(no prior memory for this repo)",
   };
 
   if (opts.tier === "local") {
@@ -166,9 +179,9 @@ export function buildAgentInput(opts: RunnerOptions, issue: IssueInput): AgentIn
 export class SandboxRunner {
   constructor(private readonly opts: RunnerOptions = {}) {}
 
-  async runIssue(issue: IssueInput): Promise<SandboxOutcome> {
+  async runIssue(issue: IssueInput, memoryContext?: string): Promise<SandboxOutcome> {
     const branch = `agent/issue-${issue.number}`;
-    const agentInput = buildAgentInput(this.opts, issue);
+    const agentInput = buildAgentInput(this.opts, issue, memoryContext);
 
     // createSandbox owns worktree creation and teardown (ADR-0019); `await
     // using` ensures close() fires even if sandbox.run() throws, replacing the
@@ -188,8 +201,10 @@ export class SandboxRunner {
         : undefined,
     });
 
-    // Resolve compression callback once (off by default — set HEADROOM_MODE=conservative or aggressive to enable).
-    const compression = getCompressionCallback();
+    // Resolve compression callback once (off by default — set HEADROOM_MODE=conservative or
+    // aggressive to enable). Claude tier only: the local/Ollama tier has no token cost to save,
+    // so compressing there would only add latency for no benefit.
+    const compression = this.opts.tier === "local" ? undefined : getCompressionCallback();
 
     let runResult;
     if (compression) {
@@ -226,6 +241,7 @@ export class SandboxRunner {
       commits: result.commits,
       completed: result.completionSignal !== undefined,
       logFilePath: result.logFilePath,
+      stdout: result.stdout,
     };
   }
 }

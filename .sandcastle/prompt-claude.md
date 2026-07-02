@@ -3,6 +3,9 @@ You are implementing GitHub issue #{{ISSUE_NUMBER}}: "{{ISSUE_TITLE}}"
 ## Issue
 {{ISSUE_BODY}}
 
+## Memory from previous runs
+{{MEMORY_CONTEXT}}
+
 ## Scope guardrails
 - Only modify files directly required by this issue.
 - Do not modify, close, or reference other issues.
@@ -18,6 +21,13 @@ You are implementing GitHub issue #{{ISSUE_NUMBER}}: "{{ISSUE_TITLE}}"
 2. Run the test suite and make sure it is green.
 3. Commit your work to the current branch with clear, imperative messages
    referencing #{{ISSUE_NUMBER}}.
-4. When the issue is fully implemented and committed, output exactly this
+4. Optionally, if you discovered a durable project convention or hit a
+   non-obvious trap while working this issue, share it for future runs by
+   emitting one or more of these tags before the completion signal:
+   `<repo-convention>...</repo-convention>` for a rule this repo always
+   follows, `<gotcha>...</gotcha>` for a trap worth warning about. Only emit
+   these for genuinely reusable facts — skip it if there's nothing worth
+   telling a future run.
+5. When the issue is fully implemented and committed, output exactly this
    line, by itself, and then stop — produce no further output or commits:
    <promise>ISSUE_COMPLETE</promise>

@@ -3,12 +3,18 @@ Implement this change in the repository, then commit. Use your tools now — rea
 TASK (issue #{{ISSUE_NUMBER}}): {{ISSUE_TITLE}}
 {{ISSUE_BODY}}
 
+MEMORY FROM PREVIOUS RUNS:
+{{MEMORY_CONTEXT}}
+
 The code lives in the `.sandcastle/` directory (TypeScript). Steps:
 1. Read the relevant `.sandcastle/*.ts` file(s) with your read tool.
 2. Make the change with your edit tool.
 3. Run the tests: `cd .sandcastle && npm test` — fix until they pass.
 4. Commit: `cd .sandcastle && cd .. && git add -A && git commit -m "<message> (#{{ISSUE_NUMBER}})"`
 5. Do NOT push or open a PR.
+6. Optional: if you learned a reusable project convention or hit a trap,
+   emit `<repo-convention>...</repo-convention>` or `<gotcha>...</gotcha>`
+   before the completion line.
 
 When committed, output this exact line alone and stop:
 <promise>ISSUE_COMPLETE</promise>
