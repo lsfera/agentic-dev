@@ -22,6 +22,12 @@ on:
     tags: ["v*"]
     paths:
       - ".devcontainer/**"
+      # The image bakes .sandcastle at AGENTIC_REF=github.sha (see build step
+      # below), so an orchestrator-only change must also trigger a rebuild —
+      # otherwise the published image silently drifts from main (found while
+      # preparing the v0.5.0 release: no rebuild had run since PR #71, so
+      # everything since — review gate, retry, memory — was baked-image-stale).
+      - ".sandcastle/**"
       - ".github/workflows/publish-devcontainer.yml"
   workflow_dispatch:
 

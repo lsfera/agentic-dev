@@ -71,12 +71,15 @@ services:
     # credentials from the host shell into the container so a human can run the
     # full workflow from inside (`docker compose exec -it devcontainer cockpit`).
     # Values are taken from the host environment — nothing is committed here.
-    # Unset host vars are forwarded as empty strings (harmless; the TS resolver
-    # and gh/claude CLIs treat empty as absent). AGENTIC_IN_CONTAINER is baked
-    # into the image via the Dockerfile ENV directive, not forwarded here.
+    # GH_TOKEN and GITHUB_TOKEN are merged into one nested-fallback line rather
+    # than forwarded as two separate vars: `gh` only falls back GH_TOKEN ->
+    # GITHUB_TOKEN when GH_TOKEN is absent, NOT when it's present-but-empty —
+    # forwarding both unconditionally (${GH_TOKEN:-}) would always set an empty
+    # GH_TOKEN and break auth for anyone who only exports GITHUB_TOKEN on the
+    # host. AGENTIC_IN_CONTAINER is baked into the image via the Dockerfile ENV
+    # directive, not forwarded here.
     environment:
-      GH_TOKEN: ${GH_TOKEN:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
 
