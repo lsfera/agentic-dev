@@ -111,7 +111,13 @@ services:
   headroom:
     image: ghcr.io/chopratejas/headroom:latest
     profiles: ["headroom"]
-    command: ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
+    # The image's ENTRYPOINT is already ["headroom", "proxy"] (`docker inspect`
+    # confirms this) — `command:` supplies only CLI options, never the
+    # subcommand itself. Repeating "headroom proxy" here doubles the argv into
+    # `headroom proxy headroom proxy --host ...`, which click rejects outright
+    # ("Got unexpected extra arguments"), so the container exits immediately
+    # and `--profile headroom up` never actually serves anything.
+    command: ["--host", "0.0.0.0", "--port", "8787"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
