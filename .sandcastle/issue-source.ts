@@ -183,8 +183,23 @@ export class IssueSource {
     return { number };
   }
 
+  /**
+   * Ensure a label exists so `--label X` on issue create/edit doesn't fail
+   * with "not found" — `gh issue create` never auto-creates labels itself.
+   * Idempotent (`--force`); best-effort — a failure here is swallowed and
+   * left for the caller's own `--label` flag to surface as a real error.
+   */
+  private async ensureLabel(label: string): Promise<void> {
+    try {
+      await this.gh(["label", "create", label, "--force"]);
+    } catch {
+      // swallowed — see doc comment
+    }
+  }
+
   /** Create a new issue with the given labels. Returns the new issue number. */
   async createIssue(opts: { title: string; body: string; labels: string[] }): Promise<number> {
+    await Promise.all(opts.labels.map((label) => this.ensureLabel(label)));
     const { stdout } = await this.gh([
       "issue", "create",
       "--title", opts.title,
