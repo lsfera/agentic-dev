@@ -93,7 +93,25 @@ services:
       HEADROOM_API_KEY: ${HEADROOM_API_KEY:-}
 
     working_dir: ${WORKSPACE_FOLDER:-/workspace}
-    command: sleep infinity
+    # Fix docker-host.sock's group before idling. docker-outside-of-docker's own
+    # /usr/local/share/docker-init.sh normally does this, but only as a CLI-
+    # injected ENTRYPOINT wrapper (devcontainer up / VS Code Reopen in
+    # Container) — this project deliberately supports launching via a bare
+    # `docker compose up` too (README "Local development & dogfood"), which
+    # never invokes that wrapper, so the fixup silently never runs and every
+    # docker-outside-of-docker call inside the container gets "permission
+    # denied". Even invoking docker-init.sh wouldn't fully help here: on Docker
+    # Desktop, docker-host.sock's GID is 0 (root), and docker-init.sh's own
+    # logic can't groupmod the "docker" group onto an already-taken GID 0 — it
+    # falls back to a socat proxy on docker.sock instead, which is exactly the
+    # proxy main.ts's resolveDockerHost() bypasses (the empty-turn-#2 fix) by
+    # talking to docker-host.sock directly. That bypass only works if
+    # docker-host.sock itself is reachable, which is what this actually fixes.
+    # Best-effort: harmless no-op if the socket is absent (bare `docker compose
+    # up`, no DooD feature) or already correctly grouped. sudo is passwordless
+    # for vscode in the base devcontainer image.
+    command: >
+      sh -c "sudo chgrp docker /var/run/docker-host.sock 2>/dev/null; exec sleep infinity"
 
   # Headroom compression proxy (opt-in: `docker compose --profile headroom up`).
   # context-compressor.ts calls compress(), which defaults to POSTing to
