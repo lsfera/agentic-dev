@@ -34,6 +34,8 @@ import { reduce, READY_LABEL, reviewVerdict, type State, type Pr, type Policy, t
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 import { ReviewerAdapter } from "./reviewer-adapter.ts";
+import { readMemoryContext, writeMemoryEntry } from "./memory-store.ts";
+import { parseMemoryTags, buildOutcomeEntry, type OutcomeAttempt } from "./memory.ts";
 
 export { SANDBOX_LABEL };
 
@@ -623,6 +625,9 @@ async function main(): Promise<void> {
   // Per-issue count of SandboxFailed events dispatched this run. Persists
   // across ticks so the retry cap is enforced within a single orchestrator run.
   const failedAttempts: Record<number, number> = {};
+  // Per-issue attempt history this run, accumulated across retries — flattened
+  // into a single outcome memory entry at terminal state (ADR-0022).
+  const attemptHistory: Record<number, OutcomeAttempt[]> = {};
   // Issue ids whose PrMerged event has been dispatched to the reducer.
   // Synchronous check + add before the first await ensures concurrent smee
   // and reconciliation paths never double-dispatch the same merge.
@@ -762,20 +767,28 @@ async function main(): Promise<void> {
       console.log(`[${mode}] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
 
       void (async () => {
-        let openedPr: Pr | null = null;
+        let openedPr: (Pr & { prNumber?: number }) | null = null;
         let sandboxFailed = false;
+        let failureNote: string | undefined;
         try {
           openedPr = await processIssue(n, issues, runner, base, repoRoot, mode);
           if (openedPr === null) {
             sandboxFailed = true;
+            failureNote = "sandbox produced no commits";
             console.log(`[${mode}] #${n} sandbox produced no commits`);
           }
         } catch (err) {
           console.error(`[${mode}] #${n} failed:`, err);
           sandboxFailed = true;
+          failureNote = err instanceof Error ? err.message : String(err);
         } finally {
           inFlight.splice(inFlight.indexOf(n), 1);
         }
+
+        // Record this attempt (ADR-0022) — flattened into a single outcome
+        // memory entry when the issue reaches terminal state below.
+        const history = attemptHistory[n] ?? (attemptHistory[n] = []);
+        history.push({ succeeded: !sandboxFailed, note: sandboxFailed ? failureNote : undefined });
 
         if (sandboxFailed) {
           const attempts = failedAttempts[n] ?? 0;
@@ -801,6 +814,8 @@ async function main(): Promise<void> {
               } catch (err) {
                 console.error(`[${mode}] #${n} could not post exhaustion comment:`, err);
               }
+              // Terminal state (retries exhausted) — persist the outcome (ADR-0022).
+              await writeMemoryEntry(issues, buildOutcomeEntry({ issueNumber: n, attempts: history }));
             }
           }
         }
@@ -854,6 +869,12 @@ async function main(): Promise<void> {
                   } catch (err) {
                     console.error(`[${mode}] #${n} could not enable auto-merge:`, err);
                   }
+                  // Terminal state (review passed — see ADR-0022 for why this,
+                  // not the later async PrMerged, is treated as the success point).
+                  await writeMemoryEntry(
+                    issues,
+                    buildOutcomeEntry({ issueNumber: n, prNumber: openedPr?.prNumber, attempts: history }),
+                  );
                 }
                 if (reviewAction.type === "WaitForHuman") {
                   console.log(`[${mode}] #${n} review requested changes → parked for human`);
@@ -887,7 +908,7 @@ async function processIssue(
   base: string,
   repoRoot: string,
   mode: Mode,
-): Promise<Pr | null> {
+): Promise<(Pr & { prNumber?: number }) | null> {
   const issue = await issues.get(n);
 
   // Claim: drop the ready label so the next tick won't re-pick this issue.
@@ -905,12 +926,23 @@ async function processIssue(
   // of reusing a stale ref that would conflict at merge time (#23).
   await resetAgentBranch(n, (args) => sh("git", args, { cwd: repoRoot }));
 
-  const outcome = await runner.runIssue(issue);
+  // Retrieve cross-run memory (ADR-0022) — repo conventions and gotchas
+  // surfaced by previous runs against this repo. Fails open to "no memory"
+  // internally; never blocks the sandbox from starting.
+  const memoryContext = await readMemoryContext(issues);
+
+  const outcome = await runner.runIssue(issue, memoryContext);
   console.log(
     `[${mode}] #${n} sandbox done: branch=${outcome.branch} ` +
       `commits=${outcome.commits.length} completed=${outcome.completed}` +
       (outcome.logFilePath ? ` log=${outcome.logFilePath}` : ""),
   );
+
+  // Optional agent-emitted enrichment (ADR-0022) — piggybacks on the same
+  // stdout already scanned for the completion signal, no extra agent turn.
+  for (const entry of parseMemoryTags(outcome.stdout)) {
+    await writeMemoryEntry(issues, entry);
+  }
 
   if (outcome.commits.length === 0) {
     return null;
@@ -941,7 +973,13 @@ async function processIssue(
   }
   await issues.comment(n, `Implemented in an isolated sandbox; opened ${prUrl}.`);
   console.log(`[${mode}] #${n} → ${prUrl}`);
-  return { issue: n, ciStatus: "pending", merged: false };
+  const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
+  return {
+    issue: n,
+    ciStatus: "pending",
+    merged: false,
+    prNumber: prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined,
+  };
 }
 
 // Run only when executed directly; not when imported (e.g., in tests).

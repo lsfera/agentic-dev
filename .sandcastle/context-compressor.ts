@@ -2,8 +2,9 @@
  * Context compressor — headroom-ai integration for agentic-dev.
  *
  * Wraps headroom-ai's compress() to shrink compiled prompts before they reach the agent.
- * Only activates in Claude tier (local Ollama has no token cost). Controlled by
- * HEADROOM_MODE env var — off by default for safe rollout.
+ * Controlled by HEADROOM_MODE env var — off by default for safe rollout. This module is
+ * tier-agnostic; callers gate on tier themselves (sandbox-runner.ts skips invoking the
+ * callback on the local/Ollama tier, which has no token cost to save).
  *
  * Works at the prompt text level (sandcastle doesn't expose structured messages), so
  * compression targets the template-resolved prompt + substituted args that form our
@@ -29,13 +30,21 @@ export function getCompressionCallback() {
   if (HEADROOM_MODE === "off") return undefined;
 
   return async (prompt: string): Promise<string> => {
-    const mod = await import("headroom-ai");
+    const { compress } = await import("headroom-ai");
     const messages = [{ role: "user" as const, content: prompt }];
-    const result = await mod.compress(messages, { model: HEADROOM_MODEL });
-    // headroom returns a CompressResult with compressed messages array.
-    // Cast to access the output — headroom's actual return shape is opaque without typing.
-    const compressedMsgs = (result as unknown as { messages: Array<{ role: string; content: string }> }).messages;
-    return compressedMsgs[0]?.content ?? prompt;
+    const result = await compress(messages, { model: HEADROOM_MODEL });
+    // CompressResult.messages is typed `any[]` (headroom preserves whatever
+    // format was passed in) — validate the shape at runtime rather than
+    // trusting it, so a proxy-side format drift degrades to uncompressed
+    // passthrough loudly instead of silently.
+    const content = result.messages[0]?.content;
+    if (typeof content !== "string") {
+      console.warn(
+        `[context-compressor] unexpected compress() result shape (messages[0].content is ${typeof content}) — using uncompressed prompt`,
+      );
+      return prompt;
+    }
+    return content;
   };
 }
 

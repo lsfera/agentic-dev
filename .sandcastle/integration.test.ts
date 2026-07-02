@@ -84,10 +84,14 @@ test(
       prNumber: 85,
     });
 
-    // A genuine pass should return the validated ReviewOutput (not null).
-    // If the reviewer can't run on this branch (CI status block), skip gracefully.
+    // A genuine review should return the validated ReviewOutput (not null). The
+    // verdict itself is real judgment on the branch's diff and may legitimately
+    // be "changes-requested" — assert shape, not a specific outcome.
     assert.ok(result != null, `expected non-null verdict from review-gate, got ${JSON.stringify(result)}`);
-    assert.equal(result.verdict, "pass", `expected pass verdict, got ${result.verdict}`);
+    assert.ok(
+      result.verdict === "pass" || result.verdict === "changes-requested",
+      `expected a valid verdict, got ${result.verdict}`,
+    );
     assert.ok(result.summary.length > 0, "expected non-empty summary");
   },
 );

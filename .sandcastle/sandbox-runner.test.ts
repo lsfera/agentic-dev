@@ -108,3 +108,13 @@ test("network is undefined when not provided", () => {
   const input = buildAgentInput({}, STUB_ISSUE);
   assert.equal(input.network, undefined);
 });
+
+test("promptArgs MEMORY_CONTEXT carries the caller-supplied memory context", () => {
+  const input = buildAgentInput({}, STUB_ISSUE, "[gotcha] Watch the MTU.");
+  assert.equal(input.promptArgs["MEMORY_CONTEXT"], "[gotcha] Watch the MTU.");
+});
+
+test("promptArgs MEMORY_CONTEXT defaults to the no-memory placeholder when omitted", () => {
+  const input = buildAgentInput({}, STUB_ISSUE);
+  assert.equal(input.promptArgs["MEMORY_CONTEXT"], "(no prior memory for this repo)");
+});
