@@ -19,8 +19,10 @@
 import { run, claudeCode, Output, StructuredOutputError } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { reviewVerdict, type ReviewOutput, type ReviewVerdict } from "./reduce.ts";
+import { getCompressionCallback } from "./context-compressor.js";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 
@@ -120,6 +122,14 @@ export interface ReviewerPassOneConfig {
   readonly maxIterations: 1;
 }
 
+/** Pass-2 (extract) run options returned by buildReviewerPassTwoConfig. */
+export interface ReviewerPassTwoConfig {
+  /** The extraction prompt file path — review-extraction.md with no {{KEY}} placeholders. */
+  readonly promptFile: string;
+  /** No args needed: review-extraction.md has zero template keys. */
+  readonly name: string;
+}
+
 /**
  * Pure function: resolve ReviewerOptions + ReviewInput to the produce-pass
  * run options — no Docker, no network. Mirrors buildAgentInput in
@@ -144,6 +154,20 @@ export function buildReviewerPassOneConfig(
   };
 }
 
+/**
+ * Pure function: resolve the extraction-pass run options — no Docker, no network.
+ * Mirrors buildReviewerPassOneConfig from #80. The extraction template has zero
+ * {{KEY}} placeholders so promptArgs are not needed (and would conflict with inline
+ * prompts per sandcastle's constraint). The caller wires in agent/sandbox/cwd/output
+ * before calling run().
+ */
+export function buildReviewerPassTwoConfig(input: ReviewInput): ReviewerPassTwoConfig {
+  return {
+    promptFile: join(_dir, "review-extraction.md"),
+    name: `review-extract-${input.issueNumber}`,
+  };
+}
+
 export class ReviewerAdapter {
   private readonly opts: ReviewerOptions;
 
@@ -161,43 +185,83 @@ export class ReviewerAdapter {
     const cwd = this.opts.cwd;
 
     const passOneConfig = buildReviewerPassOneConfig(this.opts, input);
+    const compression = getCompressionCallback();
 
     // Pass 1: produce — the reviewer reads the diff and forms a free-form review.
     let reviewResult;
     try {
-      reviewResult = await run({
-        agent: claudeCode(model, { permissionMode: "auto" }),
-        sandbox: noSandbox(),
-        cwd,
-        ...passOneConfig,
-      });
+      // Pre-read template, resolve args, optionally compress — outside sandcastle's Effect generators.
+      if (compression) {
+        const raw = await readFile(join(_dir, "review-prompt.md"), "utf8");
+        let text = raw;
+        for (const [key, value] of Object.entries(passOneConfig.promptArgs)) {
+          text = text.replaceAll(`{{${key}}}`, String(value));
+        }
+        const compressed = await compression(text);
+
+        reviewResult = await run({
+          agent: claudeCode(model, { permissionMode: "auto" }),
+          sandbox: noSandbox(),
+          cwd,
+          prompt: compressed,
+        });
+      } else {
+        reviewResult = await run({
+          agent: claudeCode(model, { permissionMode: "auto" }),
+          sandbox: noSandbox(),
+          cwd,
+          ...passOneConfig,
+        });
+      }
     } catch (err) {
       console.warn(`[reviewer] pass-1 (produce) failed for #${input.issueNumber}:`, err);
       return null;
     }
 
+    const passTwoConfig = buildReviewerPassTwoConfig(input);
+
     if (!reviewResult.resume) {
-      console.warn(`[reviewer] resume not available after pass-1 for #${input.issueNumber} — using pass-1 stdout for extraction`);
+      console.warn(`[reviewer] resume not available after pass-1 for #${input.issueNumber} — using fresh run for extraction`);
     }
 
     // Pass 2: extract — resume the session and ask for the structured output block.
     try {
-      const extractResult = reviewResult.resume
-        ? await reviewResult.resume(
-            await loadPromptFile(join(_dir, "review-extraction.md")),
-            {
+      let extractResult;
+      if (compression) {
+        const raw = await loadPromptFile(passTwoConfig.promptFile);
+        const compressed = await compression(raw);
+
+        extractResult = reviewResult.resume
+          ? await reviewResult.resume(compressed, {
               output: Output.object({ tag: "output", schema: reviewOutputSchema }),
               cwd,
-            },
-          )
-        : await run({
-            agent: claudeCode(model, { permissionMode: "auto" }),
-            sandbox: noSandbox(),
-            cwd,
-            promptFile: join(_dir, "review-extraction.md"),
-            output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-            name: `review-extract-${input.issueNumber}`,
-          });
+            })
+          : await run({
+              agent: claudeCode(model, { permissionMode: "auto" }),
+              sandbox: noSandbox(),
+              cwd,
+              prompt: compressed,
+              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
+              name: passTwoConfig.name,
+            });
+      } else {
+        extractResult = reviewResult.resume
+          ? await reviewResult.resume(
+              await loadPromptFile(join(_dir, "review-extraction.md")),
+              {
+                output: Output.object({ tag: "output", schema: reviewOutputSchema }),
+                cwd,
+              },
+            )
+          : await run({
+              agent: claudeCode(model, { permissionMode: "auto" }),
+              sandbox: noSandbox(),
+              cwd,
+              promptFile: passTwoConfig.promptFile,
+              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
+              name: passTwoConfig.name,
+            });
+      }
 
       return (extractResult as typeof extractResult & { output: ReviewOutput }).output;
     } catch (err) {
