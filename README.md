@@ -310,6 +310,34 @@ The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk l
 
 To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
 
+## Context compression (headroom)
+
+Off by default (`HEADROOM_MODE=off`). When enabled, [headroom-ai](https://github.com/headroomlabs-ai/headroom) compresses agent traffic to cut token cost on long, multi-turn `/afk` sandboxes: the initial prompt is compressed on the host before the sandbox launches, and — when the proxy is running — the inner sandbox's entire live Claude Code session is routed through it too, compressing every turn. See [ADR-0023](docs/adr/0023-headroom-context-compression-proxy.md).
+
+**Prerequisites**
+
+- An `ANTHROPIC_API_KEY` — the proxy performs compression by calling an LLM itself, so `CLAUDE_CODE_OAUTH_TOKEN` (the default subscription auth, ADR-0003) does not work for it. Without a key the proxy silently falls back to uncompressed traffic rather than blocking a run.
+
+**Run the proxy (opt-in compose profile)**
+
+```bash
+HEADROOM_MODE=conservative ANTHROPIC_API_KEY=sk-... \
+  docker compose -f .devcontainer/docker-compose.yml --profile headroom up
+```
+
+The `headroom` service is only started with `--profile headroom` — a bare `docker compose up` never pulls or runs it.
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `HEADROOM_MODE` | `off` | `conservative` or `aggressive` enables compression; read by `context-compressor.ts`. |
+| `HEADROOM_MODEL` | `claude-sonnet-4-6` | Model the proxy compresses for. |
+| `HEADROOM_BASE_URL` | `http://headroom:8787` | Where the *outer* devcontainer's one-shot `compress()` call reaches the proxy (compose-internal DNS). Override to point at Headroom Cloud instead. |
+| `HEADROOM_API_KEY` | unset | Headroom Cloud key, if using the cloud service instead of the local proxy. |
+
+The *inner* sandbox reaches the proxy differently — via `host.docker.internal:8787` (same mechanism the local/Ollama tier uses, since it's a docker-outside-of-docker sibling container on a separate network from the compose project). Confirm the proxy container is up with `docker compose -f .devcontainer/docker-compose.yml --profile headroom ps`.
+
+**Known limitation:** whether `CLAUDE_CODE_OAUTH_TOKEN`'s subscription-OAuth flow survives being routed through the proxy has not been live-tested — see ADR-0023's Consequences before relying on this for an OAuth-only setup.
+
 ## Example configurations
 
 Concrete, copy-pasteable setups by use case live in [`examples/`](examples/) —
