@@ -109,9 +109,20 @@ fi
 # image ships only the orchestrator *source* (node not yet present when the
 # Dockerfile runs — it arrives via a devcontainer feature), so the baked copy
 # installs its deps on first use, once per container.
+#
+# The lockfile check alone misses a PLATFORM change with an unchanged lockfile:
+# ORCH_DIR (the workspace copy) is bind-mounted, so the same node_modules is
+# visible from both the macOS host and this Linux container — whichever side
+# last ran `npm install` wins platform-specific optional deps (e.g. esbuild's
+# @esbuild/darwin-arm64 vs @esbuild/linux-arm64), silently breaking tsx on the
+# other side with no lockfile change to detect. A platform marker catches this.
+PLATFORM_MARKER="$ORCH_DIR/node_modules/.platform"
+CURRENT_PLATFORM="$(uname -s)-$(uname -m)"
 if [ ! -x "$ORCH_DIR/node_modules/.bin/tsx" ] ||
-   [ "$ORCH_DIR/package-lock.json" -nt "$ORCH_DIR/node_modules/.package-lock.json" ]; then
+   [ "$ORCH_DIR/package-lock.json" -nt "$ORCH_DIR/node_modules/.package-lock.json" ] ||
+   [ "$(cat "$PLATFORM_MARKER" 2>/dev/null)" != "$CURRENT_PLATFORM" ]; then
   ( cd "$ORCH_DIR" && npm install )
+  echo "$CURRENT_PLATFORM" > "$PLATFORM_MARKER"
 fi
 
 # Source GH_TOKEN for the orchestrator's own gh calls; kept out of the sandboxes.
