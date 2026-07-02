@@ -111,9 +111,25 @@ services:
   headroom:
     image: ghcr.io/chopratejas/headroom:latest
     profiles: ["headroom"]
-    command: ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
+    # The image's ENTRYPOINT is already ["headroom", "proxy"] (`docker inspect`
+    # confirms this) — `command:` supplies only CLI options, never the
+    # subcommand itself. Repeating "headroom proxy" here doubles the argv into
+    # `headroom proxy headroom proxy --host ...`, which click rejects outright
+    # ("Got unexpected extra arguments"), so the container exits immediately
+    # and `--profile headroom up` never actually serves anything.
+    command: ["--host", "0.0.0.0", "--port", "8787"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # Published to the host loopback (not just devcontainer-network) so both
+    # a human on the host (`curl localhost:8787/stats`) and the INNER
+    # sandbox — a docker-outside-of-docker sibling container on the separate
+    # agentic-sandbox-net, not this compose project's network — can reach it,
+    # the latter via host.docker.internal:8787, to route Claude Code's live
+    # API traffic through the proxy (.sandcastle/sandbox-runner.ts). The
+    # outer devcontainer service still resolves `headroom` directly by
+    # compose DNS for its own one-shot compress() calls.
+    ports:
+      - "8787:8787"
 
 networks:
   # Rename Compose's default network from "<project>_default" to a fixed,
