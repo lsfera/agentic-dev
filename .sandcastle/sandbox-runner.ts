@@ -27,7 +27,7 @@ import { createSandbox, claudeCode, opencode, type AgentProvider, type PromptArg
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { getCompressionCallback } from "./context-compressor.js";
+import { getCompressionCallback, isCompressionActive } from "./context-compressor.js";
 import { fileURLToPath } from "node:url";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
@@ -168,7 +168,25 @@ export function buildAgentInput(
     };
   }
   return {
-    agent: claudeCode(opts.model ?? "claude-sonnet-4-6", { permissionMode: "auto" }),
+    // Route the inner sandbox's whole live Claude Code session through the
+    // headroom proxy (docker-compose.yml's `headroom` service), not just the
+    // one-shot prompt compression above — compresses every turn, including
+    // tool output and file contents the pre-read compression never sees.
+    // host.docker.internal is how the inner sandbox already reaches host-side
+    // services on agentic-sandbox-net (main.ts's ensureSandboxNetwork comment
+    // — the same trick the local/Ollama tier uses): the proxy lives on
+    // devcontainer-network, a separate compose network the inner sandbox
+    // can't resolve by service name. Off unless HEADROOM_MODE is enabled.
+    // UNVERIFIED end-to-end: whether ANTHROPIC_BASE_URL survives Claude Code's
+    // CLAUDE_CODE_OAUTH_TOKEN subscription flow through a third-party proxy
+    // (vs. ANTHROPIC_API_KEY auth) has not been live-tested — the proxy also
+    // needs its own ANTHROPIC_API_KEY to forward to the real API regardless.
+    agent: claudeCode(opts.model ?? "claude-sonnet-4-6", {
+      permissionMode: "auto",
+      env: isCompressionActive()
+        ? { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" }
+        : {},
+    }),
     imageName: opts.imageName ?? "sandcastle:local",
     network: opts.network,
     promptFile: join(_dir, "prompt-claude.md"),
