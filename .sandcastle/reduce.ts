@@ -21,6 +21,8 @@
  */
 
 export const READY_LABEL = "ready-for-agent";
+export const IN_PROGRESS_LABEL = "agent:in-progress";
+export const IN_REVIEW_LABEL = "agent:in-review";
 
 export type CiStatus = "none" | "pending" | "success" | "failure" | "conflicting";
 
@@ -82,6 +84,7 @@ export type Action =
   | { type: "StartReview"; pr: Pr }
   | { type: "EnableAutoMerge"; pr: Pr }
   | { type: "Relabel"; issueId: number; label: string }
+  | { type: "RemoveLabel"; issueId: number; label: string }
   | { type: "WaitForHuman"; pr: Pr }
   | { type: "Comment"; issueId: number; body: string }
   | { type: "Stop" };
@@ -135,32 +138,58 @@ function onPrMerged(state: State, mergedPr: Pr): Action[] {
 
 function onSandboxFinished(state: State, event: { issue: number; pr: Pr }): Action[] {
   if (state.policy.mode === "afk") {
-    return [{ type: "StartReview", pr: event.pr }];
+    // Label actions come BEFORE StartReview: main.ts processes this array in
+    // order, and StartReview's handling awaits the full review inline (an LLM
+    // call) before moving to the next action — so if the labels were emitted
+    // after StartReview, agent:in-review would never become durable during
+    // the review itself, defeating the crash-recovery this label exists for
+    // (ADR-0021), and would only get attached once the review had already
+    // finished.
+    return [
+      { type: "RemoveLabel", issueId: event.issue, label: IN_PROGRESS_LABEL },
+      { type: "Relabel", issueId: event.issue, label: IN_REVIEW_LABEL },
+      { type: "StartReview", pr: event.pr },
+    ];
   }
-  return [{ type: "WaitForHuman", pr: event.pr }];
+  return [
+    { type: "WaitForHuman", pr: event.pr },
+    { type: "RemoveLabel", issueId: event.issue, label: IN_PROGRESS_LABEL },
+  ];
 }
 
 function onReviewFinished(event: { issue: number; pr: Pr; verdict: ReviewVerdict }): Action[] {
   if (event.verdict === "pass") {
-    return [{ type: "EnableAutoMerge", pr: event.pr }];
+    return [
+      { type: "EnableAutoMerge", pr: event.pr },
+      { type: "RemoveLabel", issueId: event.issue, label: IN_REVIEW_LABEL },
+    ];
   }
-  return [{ type: "WaitForHuman", pr: event.pr }];
+  return [
+    { type: "WaitForHuman", pr: event.pr },
+    { type: "RemoveLabel", issueId: event.issue, label: IN_REVIEW_LABEL },
+  ];
 }
 
 function onSandboxFailed(state: State, event: { issue: number }): Action[] {
   const maxRetries = state.policy.maxRetries ?? 2;
   const attempts = (state.failedAttempts ?? {})[event.issue] ?? 0;
   if (attempts < maxRetries) {
-    return [{ type: "Relabel", issueId: event.issue, label: READY_LABEL }];
+    return [
+      { type: "RemoveLabel", issueId: event.issue, label: IN_PROGRESS_LABEL },
+      { type: "Relabel", issueId: event.issue, label: READY_LABEL },
+    ];
   }
-  return [{
-    type: "Comment",
-    issueId: event.issue,
-    body:
-      `AFK agent failed ${attempts + 1} times (retry limit: ${maxRetries}) — ` +
-      `leaving this issue unlabelled for a human to inspect and re-label ` +
-      `\`ready-for-agent\` if appropriate.`,
-  }];
+  return [
+    { type: "RemoveLabel", issueId: event.issue, label: IN_PROGRESS_LABEL },
+    {
+      type: "Comment",
+      issueId: event.issue,
+      body:
+        `AFK agent failed ${attempts + 1} times (retry limit: ${maxRetries}) — ` +
+        `leaving this issue unlabelled for a human to inspect and re-label ` +
+        `\`ready-for-agent\` if appropriate.`,
+    },
+  ];
 }
 
 /**
@@ -193,7 +222,52 @@ function onTick(state: State): Action[] {
 
   // Serial by default: never exceed the concurrency cap, counting in-flight work.
   const slots = Math.max(0, state.policy.concurrency - state.inFlight.length);
-  return ready
-    .slice(0, slots)
-    .map((issue) => ({ type: "StartSandbox", issueId: issue.id }));
+  const toStart = ready.slice(0, slots);
+  // Emit StartSandbox then Relabel(agent:in-progress) for each claimed issue.
+  // The label is the durable mirror written at claim time (ADR-0021).
+  return [
+    ...toStart.map((issue): Action => ({ type: "StartSandbox", issueId: issue.id })),
+    ...toStart.map((issue): Action => ({ type: "Relabel", issueId: issue.id, label: IN_PROGRESS_LABEL })),
+  ];
+}
+
+/**
+ * Startup reconcile: pure function over the boot-time label snapshot → actions.
+ *
+ * Reads labels written by a previous orchestrator run to recover work that was
+ * in-flight when it crashed. Called once at startup; State.inFlight is the
+ * runtime source of truth thereafter (ADR-0021).
+ *
+ * - agent:in-progress (no open PR) → re-queue to ready-for-agent (fresh sandbox).
+ * - agent:in-review (open PR) → re-run the read-only AI review on the PR.
+ * - agent:in-review (no PR, e.g. merged/closed) → remove stale label.
+ * - agent:in-progress (open PR exists) → leave for normal flow; unusual state.
+ */
+export function reconcileFromLabels(issues: Issue[], prs: Pr[]): Action[] {
+  const openPrByIssue = new Map<number, Pr>(
+    prs.filter((p) => !p.merged).map((p) => [p.issue, p]),
+  );
+  const actions: Action[] = [];
+
+  for (const issue of issues) {
+    if (issue.labels.includes(IN_PROGRESS_LABEL) && !openPrByIssue.has(issue.id)) {
+      // Sandbox was running but no PR opened — re-queue for a fresh attempt.
+      actions.push({ type: "RemoveLabel", issueId: issue.id, label: IN_PROGRESS_LABEL });
+      actions.push({ type: "Relabel", issueId: issue.id, label: READY_LABEL });
+    }
+
+    if (issue.labels.includes(IN_REVIEW_LABEL)) {
+      const pr = openPrByIssue.get(issue.id);
+      if (pr) {
+        // AI review was running — re-run it on the existing PR (idempotent).
+        // The label is removed when ReviewFinished is processed.
+        actions.push({ type: "StartReview", pr });
+      } else {
+        // PR gone (merged/closed) — clean up the stale label.
+        actions.push({ type: "RemoveLabel", issueId: issue.id, label: IN_REVIEW_LABEL });
+      }
+    }
+  }
+
+  return actions;
 }

@@ -30,7 +30,7 @@ import { existsSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
-import { reduce, READY_LABEL, reviewVerdict, type State, type Pr, type Policy, type Mode } from "./reduce.ts";
+import { reduce, READY_LABEL, IN_PROGRESS_LABEL, IN_REVIEW_LABEL, reviewVerdict, reconcileFromLabels, type State, type Pr, type Policy, type Mode, type ReviewOutput, type ReviewVerdict } from "./reduce.ts";
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 import { ReviewerAdapter } from "./reviewer-adapter.ts";
@@ -380,6 +380,32 @@ export async function ensureSandboxNetwork(
 }
 
 /**
+ * Idempotently ensure the two durable lifecycle labels exist in the GitHub repo
+ * (ADR-0021). Uses `--force` so the call is safe to repeat on every boot.
+ * Best-effort — any failure is logged and swallowed; the run continues.
+ */
+async function ensureLifecycleLabels(repo?: string): Promise<void> {
+  const repoFlag = repo ? ["-R", repo] : [];
+  const labels: Array<{ name: string; color: string; description: string }> = [
+    { name: IN_PROGRESS_LABEL, color: "0075ca", description: "Sandbox is actively implementing this issue" },
+    { name: IN_REVIEW_LABEL, color: "e4e669", description: "AI reviewer is running on the open PR" },
+  ];
+  for (const { name, color, description } of labels) {
+    try {
+      await sh("gh", [
+        ...repoFlag,
+        "label", "create", name,
+        "--color", color,
+        "--description", description,
+        "--force",
+      ]);
+    } catch {
+      // Label may already exist or gh may be unavailable — not fatal.
+    }
+  }
+}
+
+/**
  * Constant-time HMAC-SHA256 validation for GitHub webhook signatures.
  * `signature` is the raw X-Hub-Signature-256 header value (`sha256=<hex>`).
  */
@@ -598,6 +624,10 @@ async function main(): Promise<void> {
   // crashed run.
   await sweepOrphanedSandboxes(sh as ShellExec, project);
 
+  // Ensure the durable lifecycle labels exist (ADR-0021). Best-effort — a failure
+  // does not block the run; labels are only missing on first run or if deleted.
+  await ensureLifecycleLabels(repo);
+
   // Ensure the MTU-corrected sandbox network exists so the agent's streaming
   // responses don't stall on Docker Desktop's oversized default-bridge MTU (#48).
   const networkReady = await ensureSandboxNetwork();
@@ -706,6 +736,99 @@ async function main(): Promise<void> {
   // backstop only; 5 min is sufficient. Without smee, keep the original 60s.
   const RECONCILE_INTERVAL = smeeUrl ? 5 * 60_000 : 60_000;
 
+  // Boot reconcile (ADR-0021): read labels from a crashed predecessor and recover
+  // in-flight work. Labels are written at each transition and read ONLY here at
+  // startup; State.inFlight is the runtime source of truth thereafter.
+  {
+    let bootIssues: import("./reduce.ts").Issue[] = [];
+    let bootOpenPrs: Pr[] = [];
+    try {
+      bootIssues = await withRetry(() => issues.listAll(), { label: "listAll (boot reconcile)" });
+      bootOpenPrs = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs (boot reconcile)" });
+    } catch (err) {
+      console.warn(`[${mode}] boot reconcile: could not fetch state — skipping:`, err);
+    }
+    const bootActions = reconcileFromLabels(bootIssues, bootOpenPrs);
+    if (bootActions.length > 0) {
+      console.log(`[${mode}] boot reconcile: ${bootActions.length} action(s) from crashed predecessor`);
+    }
+    for (const action of bootActions) {
+      if (action.type === "RemoveLabel") {
+        try {
+          await issues.removeLabel(action.issueId, action.label);
+          console.log(`[${mode}] boot reconcile: #${action.issueId} removed label ${action.label}`);
+        } catch (err) {
+          console.error(`[${mode}] boot reconcile: could not remove label ${action.label} from #${action.issueId}:`, err);
+        }
+      }
+      if (action.type === "Relabel") {
+        try {
+          await withRetry(() => issues.addLabel(action.issueId, action.label), { label: `addLabel #${action.issueId}` });
+          console.log(`[${mode}] boot reconcile: #${action.issueId} relabelled as ${action.label}`);
+        } catch (err) {
+          console.error(`[${mode}] boot reconcile: could not relabel #${action.issueId}:`, err);
+        }
+      }
+      if (action.type === "StartReview") {
+        // Re-run the read-only AI review on the existing PR (idempotent).
+        // Fires in the background so startup is not blocked.
+        const reviewPr = action.pr;
+        const n = reviewPr.issue;
+        console.log(`[${mode}] boot reconcile: #${n} agent:in-review + open PR — re-running AI review`);
+        void (async () => {
+          let verdict: ReviewVerdict;
+          let reviewOutput: ReviewOutput | null = null;
+          try {
+            const ghIssue = await issues.get(n);
+            const diff = await issues.getPrDiff(n);
+            const result = await reviewer.runReview(
+              {
+                issueNumber: n,
+                issueTitle: ghIssue.title,
+                issueBody: ghIssue.body,
+                branch: `agent/issue-${n}`,
+                prNumber: n,
+              },
+              diff,
+            );
+            verdict = result.verdict;
+            reviewOutput = result.output;
+          } catch (err) {
+            console.warn(`[${mode}] boot reconcile: #${n} reviewer failed — defaulting to changes-requested:`, err);
+            verdict = reviewVerdict(null);
+          }
+          console.log(`[${mode}] boot reconcile: #${n} review verdict: ${verdict}`);
+          const reconcileState: State = { issues: bootIssues, prs: bootOpenPrs, inFlight, policy };
+          const reviewDoneActions = reduce(reconcileState, {
+            type: "ReviewFinished",
+            issue: n,
+            pr: reviewPr,
+            verdict,
+          });
+          for (const ra of reviewDoneActions) {
+            if (ra.type === "RemoveLabel") {
+              try { await issues.removeLabel(ra.issueId, ra.label); } catch {}
+            }
+            if (ra.type === "EnableAutoMerge") {
+              console.log(`[${mode}] boot reconcile: #${n} review passed → enabling auto-merge`);
+              try { await issues.enableAutoMerge(ra.pr.issue); } catch (err) {
+                console.error(`[${mode}] boot reconcile: #${n} could not enable auto-merge:`, err);
+              }
+            }
+            if (ra.type === "WaitForHuman") {
+              console.log(`[${mode}] boot reconcile: #${n} review requested changes → parked for human`);
+              if (reviewOutput) {
+                try { await issues.postPrReview(n, reviewOutput); } catch (err) {
+                  console.error(`[${mode}] boot reconcile: #${n} could not post PR review:`, err);
+                }
+              }
+            }
+          }
+        })();
+      }
+    }
+  }
+
   for (;;) {
     // Wrap all top-of-loop gh calls so a transient API blip causes a retry
     // rather than an unhandled rejection that exits the process. If all retries
@@ -749,6 +872,18 @@ async function main(): Promise<void> {
     const starts = actions.filter(
       (a): a is { type: "StartSandbox"; issueId: number } => a.type === "StartSandbox",
     );
+
+    // Apply label transitions emitted by Tick (agent:in-progress for each claimed issue).
+    // Executed before the sandbox fire-and-forgots so the label is durable immediately.
+    for (const action of actions) {
+      if (action.type === "Relabel") {
+        try {
+          await withRetry(() => issues.addLabel(action.issueId, action.label), { label: `addLabel #${action.issueId}` });
+        } catch (err) {
+          console.error(`[${mode}] could not add label ${action.label} to #${action.issueId}:`, err);
+        }
+      }
+    }
 
     if (starts.length === 0) {
       // No sandbox to start this tick — either waiting for CI on open PRs or
@@ -796,6 +931,13 @@ async function main(): Promise<void> {
           const failActions = reduce(failState, { type: "SandboxFailed", issue: n });
           failedAttempts[n] = attempts + 1;
           for (const action of failActions) {
+            if (action.type === "RemoveLabel") {
+              try {
+                await issues.removeLabel(action.issueId, action.label);
+              } catch (err) {
+                console.error(`[${mode}] #${n} could not remove label ${action.label}:`, err);
+              }
+            }
             if (action.type === "Relabel") {
               console.log(
                 `[${mode}] #${n} failed — re-queuing for retry ` +
@@ -829,10 +971,24 @@ async function main(): Promise<void> {
           };
           const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
           for (const action of finishActions) {
+            if (action.type === "RemoveLabel") {
+              try {
+                await issues.removeLabel(action.issueId, action.label);
+              } catch (err) {
+                console.error(`[${mode}] #${n} could not remove label ${action.label}:`, err);
+              }
+            }
+            if (action.type === "Relabel") {
+              try {
+                await withRetry(() => issues.addLabel(action.issueId, action.label), { label: `addLabel #${action.issueId}` });
+              } catch (err) {
+                console.error(`[${mode}] #${n} could not add label ${action.label}:`, err);
+              }
+            }
             if (action.type === "StartReview") {
               console.log(`[${mode}] #${n} → running AI review`);
-              let verdict: import("./reduce.ts").ReviewVerdict;
-              let reviewOutput: import("./reduce.ts").ReviewOutput | null = null;
+              let verdict: ReviewVerdict;
+              let reviewOutput: ReviewOutput | null = null;
               try {
                 const ghIssue = await issues.get(n);
                 const diff = await issues.getPrDiff(n);
@@ -862,6 +1018,13 @@ async function main(): Promise<void> {
                 verdict,
               });
               for (const reviewAction of reviewActions) {
+                if (reviewAction.type === "RemoveLabel") {
+                  try {
+                    await issues.removeLabel(reviewAction.issueId, reviewAction.label);
+                  } catch (err) {
+                    console.error(`[${mode}] #${n} could not remove label ${reviewAction.label}:`, err);
+                  }
+                }
                 if (reviewAction.type === "EnableAutoMerge") {
                   console.log(`[${mode}] #${n} review passed → enabling auto-merge`);
                   try {

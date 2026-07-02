@@ -8,7 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reduce, READY_LABEL, reviewVerdict, type State, type CiStatus, type Pr, type ReviewOutput } from "./reduce.ts";
+import { reduce, READY_LABEL, IN_PROGRESS_LABEL, IN_REVIEW_LABEL, reviewVerdict, reconcileFromLabels, type State, type CiStatus, type Pr, type ReviewOutput } from "./reduce.ts";
 import { parseBlockedBy } from "./issue-source.ts";
 import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode, resolveDockerHost } from "./main.ts";
 import { createHmac } from "node:crypto";
@@ -22,12 +22,13 @@ const base = (over: Partial<State> = {}): State => ({
   ...over,
 });
 
-test("ready issue under serial policy -> exactly one StartSandbox", () => {
+test("ready issue under serial policy -> exactly one StartSandbox + Relabel(agent:in-progress)", () => {
   const state = base({
     issues: [{ id: 1, labels: [READY_LABEL], blockedBy: [] }],
   });
   assert.deepEqual(reduce(state, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -40,6 +41,7 @@ test("two ready issues under serial policy -> still only one (lowest id)", () =>
   });
   assert.deepEqual(reduce(state, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -111,6 +113,7 @@ test("issue with no blockers (blockedBy: []) behaves as before", () => {
   });
   assert.deepEqual(reduce(state, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -140,6 +143,7 @@ test("issue with all blockers merged is started", () => {
   });
   assert.deepEqual(reduce(state, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 2 },
+    { type: "Relabel", issueId: 2, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -210,36 +214,46 @@ test("PrMerged unblocks all fully-resolved dependents in one call", () => {
 
 // ─── SandboxFinished / EnableAutoMerge / WaitForHuman ───────────────────────
 
-test("afk mode + SandboxFinished → StartReview (not EnableAutoMerge)", () => {
+test("afk mode + SandboxFinished → label transition in-progress→in-review BEFORE StartReview", () => {
+  // Order matters: main.ts processes this array sequentially and StartReview's
+  // handling awaits the full review inline, so the label actions must come
+  // first for agent:in-review to be durable during the review (ADR-0021).
   const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
   const state = base({ policy: { concurrency: 1, mode: "afk" } });
   assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
+    { type: "RemoveLabel", issueId: 1, label: IN_PROGRESS_LABEL },
+    { type: "Relabel", issueId: 1, label: IN_REVIEW_LABEL },
     { type: "StartReview", pr },
   ]);
 });
 
-test("hitl mode + SandboxFinished → WaitForHuman", () => {
+test("hitl mode + SandboxFinished → WaitForHuman + removes in-progress label", () => {
   const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
   const state = base({ policy: { concurrency: 1, mode: "hitl" } });
   assert.deepEqual(reduce(state, { type: "SandboxFinished", issue: 1, pr }), [
     { type: "WaitForHuman", pr },
+    { type: "RemoveLabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 });
 
-test("ReviewFinished pass → EnableAutoMerge", () => {
+test("ReviewFinished pass → EnableAutoMerge + removes in-review label", () => {
   const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
   const state = base({ policy: { concurrency: 1, mode: "afk" } });
   assert.deepEqual(reduce(state, { type: "ReviewFinished", issue: 1, pr, verdict: "pass" }), [
     { type: "EnableAutoMerge", pr },
+    { type: "RemoveLabel", issueId: 1, label: IN_REVIEW_LABEL },
   ]);
 });
 
-test("ReviewFinished changes-requested → WaitForHuman", () => {
+test("ReviewFinished changes-requested → WaitForHuman + removes in-review label", () => {
   const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
   const state = base({ policy: { concurrency: 1, mode: "afk" } });
   assert.deepEqual(
     reduce(state, { type: "ReviewFinished", issue: 1, pr, verdict: "changes-requested" }),
-    [{ type: "WaitForHuman", pr }],
+    [
+      { type: "WaitForHuman", pr },
+      { type: "RemoveLabel", issueId: 1, label: IN_REVIEW_LABEL },
+    ],
   );
 });
 
@@ -332,7 +346,7 @@ test("hitl mode + closed-unmerged PR (PR gone from state) → Stop; dependents r
 
 // ─── Concurrency knob ────────────────────────────────────────────────────────
 
-test("concurrency=2 with 2 ready issues -> emits 2 StartSandbox (lowest IDs first)", () => {
+test("concurrency=2 with 2 ready issues -> emits 2 StartSandbox + 2 Relabel(agent:in-progress)", () => {
   const state = base({
     issues: [
       { id: 3, labels: [READY_LABEL], blockedBy: [] },
@@ -344,6 +358,8 @@ test("concurrency=2 with 2 ready issues -> emits 2 StartSandbox (lowest IDs firs
   assert.deepEqual(reduce(state, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
     { type: "StartSandbox", issueId: 2 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
+    { type: "Relabel", issueId: 2, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -390,7 +406,7 @@ test("in-flight count fully saturates cap -> no StartSandbox emitted", () => {
   assert.ok(!actions.some((a) => a.type === "StartSandbox"), "no slots — cap fully used");
 });
 
-test("default concurrency is 1: two ready issues -> exactly one StartSandbox", () => {
+test("default concurrency is 1: two ready issues -> exactly one StartSandbox + Relabel", () => {
   const state = base({
     issues: [
       { id: 1, labels: [READY_LABEL], blockedBy: [] },
@@ -400,6 +416,7 @@ test("default concurrency is 1: two ready issues -> exactly one StartSandbox", (
   assert.equal(state.policy.concurrency, 1);
   assert.deepEqual(reduce(state, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -862,6 +879,7 @@ test("demo: A blocks B — A starts first; after A merges, B enters ready-set", 
   });
   assert.deepEqual(reduce(step1, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 
   // Step 2: A's PR merges → reducer emits Relabel for B
@@ -887,6 +905,7 @@ test("demo: A blocks B — A starts first; after A merges, B enters ready-set", 
   });
   assert.deepEqual(reduce(step3, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 2 },
+    { type: "Relabel", issueId: 2, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -1013,12 +1032,13 @@ test("resolveRunMode: any truthy value for AGENTIC_IN_CONTAINER → detached", (
 
 // ─── SandboxFailed retry gate ─────────────────────────────────────────────────
 
-test("SandboxFailed with attempts < maxRetries → Relabel(ready-for-agent)", () => {
+test("SandboxFailed with attempts < maxRetries → RemoveLabel(in-progress) + Relabel(ready-for-agent)", () => {
   const state = base({
     failedAttempts: { 1: 0 },
     policy: { concurrency: 1, mode: "afk", maxRetries: 2 },
   });
   assert.deepEqual(reduce(state, { type: "SandboxFailed", issue: 1 }), [
+    { type: "RemoveLabel", issueId: 1, label: IN_PROGRESS_LABEL },
     { type: "Relabel", issueId: 1, label: READY_LABEL },
   ]);
 });
@@ -1029,6 +1049,7 @@ test("SandboxFailed one attempt before cap also re-queues", () => {
     policy: { concurrency: 1, mode: "afk", maxRetries: 2 },
   });
   assert.deepEqual(reduce(state, { type: "SandboxFailed", issue: 1 }), [
+    { type: "RemoveLabel", issueId: 1, label: IN_PROGRESS_LABEL },
     { type: "Relabel", issueId: 1, label: READY_LABEL },
   ]);
 });
@@ -1047,7 +1068,10 @@ test("SandboxFailed with absent failedAttempts defaults to 0 → Relabel", () =>
   // Existing tests pass base() without failedAttempts — must still work
   const state = base();
   const actions = reduce(state, { type: "SandboxFailed", issue: 99 });
-  assert.deepEqual(actions, [{ type: "Relabel", issueId: 99, label: READY_LABEL }]);
+  assert.deepEqual(actions, [
+    { type: "RemoveLabel", issueId: 99, label: IN_PROGRESS_LABEL },
+    { type: "Relabel", issueId: 99, label: READY_LABEL },
+  ]);
 });
 
 test("after SandboxFailed Relabel, re-labelled issue is picked up by next Tick", () => {
@@ -1058,6 +1082,7 @@ test("after SandboxFailed Relabel, re-labelled issue is picked up by next Tick",
   });
   assert.deepEqual(reduce(stateAfterRelabel, { type: "Tick" }), [
     { type: "StartSandbox", issueId: 1 },
+    { type: "Relabel", issueId: 1, label: IN_PROGRESS_LABEL },
   ]);
 });
 
@@ -1067,6 +1092,72 @@ test("SandboxFailed applies in hitl mode too (afk/hitl-agnostic)", () => {
     policy: { concurrency: 1, mode: "hitl", maxRetries: 2 },
   });
   assert.deepEqual(reduce(state, { type: "SandboxFailed", issue: 5 }), [
+    { type: "RemoveLabel", issueId: 5, label: IN_PROGRESS_LABEL },
     { type: "Relabel", issueId: 5, label: READY_LABEL },
+  ]);
+});
+
+// ─── reconcileFromLabels (ADR-0021 startup reconcile) ─────────────────────────
+
+test("reconcileFromLabels: clean snapshot → no actions", () => {
+  const issues = [{ id: 1, labels: [READY_LABEL], blockedBy: [] }];
+  const prs: Pr[] = [];
+  assert.deepEqual(reconcileFromLabels(issues, prs), []);
+});
+
+test("reconcileFromLabels: agent:in-progress + no open PR → re-queue", () => {
+  const issues = [{ id: 1, labels: [IN_PROGRESS_LABEL], blockedBy: [] }];
+  const prs: Pr[] = [];
+  assert.deepEqual(reconcileFromLabels(issues, prs), [
+    { type: "RemoveLabel", issueId: 1, label: IN_PROGRESS_LABEL },
+    { type: "Relabel", issueId: 1, label: READY_LABEL },
+  ]);
+});
+
+test("reconcileFromLabels: agent:in-review + open PR → StartReview (not re-queue)", () => {
+  const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
+  const issues = [{ id: 1, labels: [IN_REVIEW_LABEL], blockedBy: [] }];
+  const actions = reconcileFromLabels(issues, [pr]);
+  assert.ok(actions.some((a) => a.type === "StartReview" && (a as { pr: Pr }).pr.issue === 1),
+    "must emit StartReview for in-review issue with open PR");
+  assert.ok(!actions.some((a) => a.type === "StartSandbox"), "must not re-queue (no new sandbox)");
+  assert.ok(!actions.some((a) => a.type === "Relabel" && (a as { label: string }).label === READY_LABEL),
+    "must not add ready-for-agent (that would spawn a duplicate sandbox)");
+});
+
+test("reconcileFromLabels: agent:in-review + no PR (gone) → RemoveLabel only", () => {
+  const issues = [{ id: 1, labels: [IN_REVIEW_LABEL], blockedBy: [] }];
+  const prs: Pr[] = [];
+  assert.deepEqual(reconcileFromLabels(issues, prs), [
+    { type: "RemoveLabel", issueId: 1, label: IN_REVIEW_LABEL },
+  ]);
+});
+
+test("reconcileFromLabels: agent:in-progress + open PR exists → no actions (unusual state, leave it)", () => {
+  const pr: Pr = { issue: 1, ciStatus: "pending", merged: false };
+  const issues = [{ id: 1, labels: [IN_PROGRESS_LABEL], blockedBy: [] }];
+  assert.deepEqual(reconcileFromLabels(issues, [pr]), []);
+});
+
+test("reconcileFromLabels: mixed — in-progress no PR + in-review with PR → both handled", () => {
+  const pr2: Pr = { issue: 2, ciStatus: "pending", merged: false };
+  const issues = [
+    { id: 1, labels: [IN_PROGRESS_LABEL], blockedBy: [] },
+    { id: 2, labels: [IN_REVIEW_LABEL], blockedBy: [] },
+  ];
+  const actions = reconcileFromLabels(issues, [pr2]);
+  // Issue 1: re-queue
+  assert.ok(actions.some((a) => a.type === "RemoveLabel" && (a as { issueId: number }).issueId === 1));
+  assert.ok(actions.some((a) => a.type === "Relabel" && (a as { issueId: number; label: string }).issueId === 1 && (a as { label: string }).label === READY_LABEL));
+  // Issue 2: re-review
+  assert.ok(actions.some((a) => a.type === "StartReview" && (a as { pr: Pr }).pr.issue === 2));
+});
+
+test("reconcileFromLabels: merged PR does not count as open PR for in-review", () => {
+  const mergedPr: Pr = { issue: 1, ciStatus: "success", merged: true };
+  const issues = [{ id: 1, labels: [IN_REVIEW_LABEL], blockedBy: [] }];
+  // Merged PR means the review was completed and the PR is done; clean up label
+  assert.deepEqual(reconcileFromLabels(issues, [mergedPr]), [
+    { type: "RemoveLabel", issueId: 1, label: IN_REVIEW_LABEL },
   ]);
 });

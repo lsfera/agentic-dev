@@ -103,6 +103,16 @@ fallback). This is what cockpit mode depends on.
 - After each close, dependents are checked and labelled if now unblocked.
 - GitHub issues are the durable state — nothing is stored locally.
 
+#### Labels
+
+| Label | Meaning |
+|-------|---------|
+| `ready-for-agent` | Issue is unblocked and waiting to be claimed by the orchestrator |
+| `agent:in-progress` | A sandbox is actively implementing this issue |
+| `agent:in-review` | The AI reviewer is running on the open PR (afk mode only) |
+
+`agent:in-progress` and `agent:in-review` are **durable mirrors** of the orchestrator's in-flight state (ADR-0021). They are written at each transition and read at startup to recover work left mid-flight by a crashed predecessor (`State.inFlight` remains the authoritative runtime source of truth — the labels are only read once, at boot). The orchestrator creates both labels idempotently on startup.
+
 ### Sandbox retry semantics (#76)
 
 When a sandbox fails (throws or produces no commits) the orchestrator automatically
