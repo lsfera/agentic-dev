@@ -29,10 +29,37 @@ import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { getCompressionCallback, isCompressionActive } from "./context-compressor.js";
 import { fileURLToPath } from "node:url";
+import { withRetry } from "./retry.ts";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 
 const COMPLETION_SIGNAL = "<promise>ISSUE_COMPLETE</promise>";
+
+/**
+ * Substrings of known-transient agent/network failures — worth one quick
+ * retry on the SAME sandbox (cheaper than the orchestrator's own #76
+ * requeue, which throws away the whole sandbox and starts a fresh one).
+ * Deliberately excludes session-limit / rate-limit / credit-balance style
+ * messages: retrying those immediately can't help (they clear on their own
+ * schedule, not ours), so they're left to fail fast and fall through to the
+ * coarser requeue-on-a-later-tick retry instead of wasting an attempt now.
+ */
+const TRANSIENT_AGENT_ERROR_PATTERNS = [
+  "server disconnected",
+  "econnreset",
+  "etimedout",
+  "socket hang up",
+  "fetch failed",
+  "network error",
+  "econnrefused",
+];
+
+/** Pure predicate: does this sandbox.run() failure look worth retrying immediately? */
+export function isTransientAgentError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  return TRANSIENT_AGENT_ERROR_PATTERNS.some((p) => lower.includes(p));
+}
 
 /**
  * Docker label applied to every inner sandbox image (via Dockerfile LABEL).
@@ -254,22 +281,30 @@ export class SandboxRunner {
       }
       const compressed = await compression(text);
 
-      runResult = await sandbox.run({
-        agent: agentInput.agent,
-        name: `issue-${issue.number}`,
-        maxIterations: this.opts.maxIterations ?? 12,
-        completionSignal: COMPLETION_SIGNAL,
-        prompt: compressed,
-      });
+      runResult = await withRetry(
+        () =>
+          sandbox.run({
+            agent: agentInput.agent,
+            name: `issue-${issue.number}`,
+            maxIterations: this.opts.maxIterations ?? 12,
+            completionSignal: COMPLETION_SIGNAL,
+            prompt: compressed,
+          }),
+        { maxAttempts: 2, baseDelayMs: 5_000, label: `issue-${issue.number} agent turn`, shouldRetry: isTransientAgentError },
+      );
     } else {
-      runResult = await sandbox.run({
-        agent: agentInput.agent,
-        name: `issue-${issue.number}`,
-        maxIterations: this.opts.maxIterations ?? 12,
-        completionSignal: COMPLETION_SIGNAL,
-        promptFile: agentInput.promptFile,
-        promptArgs: agentInput.promptArgs,
-      });
+      runResult = await withRetry(
+        () =>
+          sandbox.run({
+            agent: agentInput.agent,
+            name: `issue-${issue.number}`,
+            maxIterations: this.opts.maxIterations ?? 12,
+            completionSignal: COMPLETION_SIGNAL,
+            promptFile: agentInput.promptFile,
+            promptArgs: agentInput.promptArgs,
+          }),
+        { maxAttempts: 2, baseDelayMs: 5_000, label: `issue-${issue.number} agent turn`, shouldRetry: isTransientAgentError },
+      );
     }
 
     const result = runResult;

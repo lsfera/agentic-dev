@@ -36,6 +36,8 @@ import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "
 import { ReviewerAdapter } from "./reviewer-adapter.ts";
 import { readMemoryContext, writeMemoryEntry } from "./memory-store.ts";
 import { parseMemoryTags, buildOutcomeEntry, type OutcomeAttempt } from "./memory.ts";
+import { withRetry } from "./retry.ts";
+export { withRetry };
 
 export { SANDBOX_LABEL };
 
@@ -190,43 +192,9 @@ export function parseConcurrency(): number {
   return Math.max(1, Number(process.env.AGENTIC_CONCURRENCY ?? "1") || 1);
 }
 
-/**
- * Retry `fn` up to `maxAttempts` times with exponential backoff.
- * Throws the last error when all attempts are exhausted.
- * `sleep` is injectable for unit tests (no real network or timers needed).
- */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  opts: {
-    maxAttempts?: number;
-    baseDelayMs?: number;
-    label?: string;
-    sleep?: (ms: number) => Promise<void>;
-  } = {},
-): Promise<T> {
-  const {
-    maxAttempts = 4,
-    baseDelayMs = 2_000,
-    label = "operation",
-    sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)),
-  } = opts;
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxAttempts) {
-        const delay = baseDelayMs * 2 ** (attempt - 1);
-        console.warn(
-          `[retry] ${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms`,
-        );
-        await sleep(delay);
-      }
-    }
-  }
-  throw lastErr;
-}
+// withRetry lives in retry.ts (shared with sandbox-runner.ts, which main.ts
+// itself imports — keeping it there avoids a circular import). Imported and
+// re-exported at the top of this file for existing consumers.
 
 type ShellExec = (file: string, args: string[]) => Promise<{ stdout: string | Buffer }>;
 
