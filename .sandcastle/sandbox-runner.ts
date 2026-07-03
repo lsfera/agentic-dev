@@ -119,6 +119,17 @@ export interface AgentInput {
   readonly promptFile: string;
   /** {{KEY}} substitution args for the prompt template. */
   readonly promptArgs: PromptArgs;
+  /**
+   * Extra env vars for the sandbox CONTAINER itself (docker()'s `env`, applied
+   * via real `-e` flags at `docker run` time in createSandbox — confirmed by
+   * reading @ai-hero/sandcastle 0.10.0's source). NOT the same as an
+   * AgentProvider's own `.env` field: sandcastle's createSandbox() hardcodes
+   * `agentProviderEnv: {}` when starting the container, and invokeAgent()'s
+   * sandbox.exec() call never passes an env override either — so
+   * `claudeCode(model, { env })` is silently never applied to the running
+   * agent process. This field is the one that actually reaches the container.
+   */
+  readonly sandboxEnv?: Record<string, string>;
 }
 
 export interface IssueInput {
@@ -177,18 +188,26 @@ export function buildAgentInput(
     // — the same trick the local/Ollama tier uses): the proxy lives on
     // devcontainer-network, a separate compose network the inner sandbox
     // can't resolve by service name. Off unless HEADROOM_MODE is enabled.
-    // UNVERIFIED end-to-end: whether ANTHROPIC_BASE_URL survives Claude Code's
-    // CLAUDE_CODE_OAUTH_TOKEN subscription flow through a third-party proxy
-    // (vs. ANTHROPIC_API_KEY auth) has not been live-tested — the proxy also
-    // needs its own ANTHROPIC_API_KEY to forward to the real API regardless.
+    //
+    // This MUST be sandboxEnv (applied to the docker() sandbox provider,
+    // below), NOT claudeCode()'s own `env` option: live-verified against
+    // @ai-hero/sandcastle 0.10.0 that an AgentProvider's `.env` is silently
+    // discarded on the createSandbox()+.run() path this runner uses —
+    // createSandbox() hardcodes `agentProviderEnv: {}` when starting the
+    // container, and invokeAgent()'s sandbox.exec() call never applies an env
+    // override either. Confirmed live: with it on claudeCode() only, a real
+    // sandbox run completed commits but headroom's own /stats endpoint showed
+    // api_requests: 0 the whole time. docker()'s `env` IS applied (real -e
+    // flags at container-create time in startContainer), so container-level
+    // env is inherited by every later `docker exec`.
     agent: claudeCode(opts.model ?? "claude-sonnet-4-6", {
       permissionMode: "auto",
-      env: isCompressionActive()
-        ? { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" }
-        : {},
     }),
     imageName: opts.imageName ?? "sandcastle:local",
     network: opts.network,
+    sandboxEnv: isCompressionActive()
+      ? { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" }
+      : undefined,
     promptFile: join(_dir, "prompt-claude.md"),
     promptArgs,
   };
@@ -211,6 +230,7 @@ export class SandboxRunner {
         containerUid: this.opts.containerUid ?? 1000,
         containerGid: this.opts.containerGid ?? 1000,
         ...(agentInput.network ? { network: agentInput.network } : {}),
+        ...(agentInput.sandboxEnv ? { env: agentInput.sandboxEnv } : {}),
       }),
       cwd: this.opts.cwd,
       copyToWorktree: agentInput.copyToWorktree,
