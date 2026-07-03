@@ -15,24 +15,21 @@
 /** Compression mode — off by default for safe rollout. */
 export type HeadroomMode = "off" | "conservative" | "aggressive";
 
-const HEADROOM_MODE: HeadroomMode =
-  (process.env.HEADROOM_MODE as HeadroomMode) || "off";
-
-const HEADROOM_MODEL = process.env.HEADROOM_MODEL || "claude-sonnet-4-6";
-
-/** Current headroom mode (for tests and logging). */
+/** Current headroom mode — reads env var at call time so tests can set it after module load. */
 export function getHeadroomMode(): HeadroomMode {
-  return HEADROOM_MODE;
+  return (process.env.HEADROOM_MODE as HeadroomMode) || "off";
 }
 
 /** Resolve the compression callback, or undefined if disabled. */
 export function getCompressionCallback() {
-  if (HEADROOM_MODE === "off") return undefined;
+  const mode = getHeadroomMode();
+  if (mode === "off") return undefined;
 
+  const model = process.env.HEADROOM_MODEL || "claude-sonnet-4-6";
   return async (prompt: string): Promise<string> => {
     const { compress } = await import("headroom-ai");
     const messages = [{ role: "user" as const, content: prompt }];
-    const result = await compress(messages, { model: HEADROOM_MODEL });
+    const result = await compress(messages, { model });
     // CompressResult.messages is typed `any[]` (headroom preserves whatever
     // format was passed in) — validate the shape at runtime rather than
     // trusting it, so a proxy-side format drift degrades to uncompressed
@@ -44,11 +41,17 @@ export function getCompressionCallback() {
       );
       return prompt;
     }
+    // Token savings measurement: log before/after char counts (~4 chars/token).
+    const saved = prompt.length - content.length;
+    const pct = ((saved / prompt.length) * 100).toFixed(1);
+    console.log(
+      `[context-compressor] mode=${mode} ${prompt.length}→${content.length} chars (−${saved}, −${pct}%)`,
+    );
     return content;
   };
 }
 
-/** Whether compression is active (for logging). */
+/** Whether compression is active (for proxy injection and logging). */
 export function isCompressionActive(): boolean {
-  return HEADROOM_MODE !== "off";
+  return getHeadroomMode() !== "off";
 }
