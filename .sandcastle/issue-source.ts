@@ -12,6 +12,20 @@ import { READY_LABEL, type Issue, type ReviewOutput } from "./reduce.ts";
 
 const exec = promisify(execFile);
 
+/**
+ * Render a structured review verdict as plain markdown, for postPrReview's
+ * final fallback (a plain PR comment) when GitHub's formal review API is
+ * unavailable (self-review restriction — see postPrReview).
+ */
+export function formatReviewAsComment(output: ReviewOutput): string {
+  const header = `**AI review: ${output.verdict}**\n\n${output.summary}`;
+  if (output.comments.length === 0) return header;
+  const commentsBlock = output.comments
+    .map((c) => `**${c.path}:${c.line}** — ${c.body}`)
+    .join("\n\n");
+  return `${header}\n\n---\n${commentsBlock}`;
+}
+
 /** Parse "Blocked by #N" references from an issue body (one or many). */
 export function parseBlockedBy(body: string): number[] {
   const idx = body.search(/blocked\s+by\b/i);
@@ -228,7 +242,16 @@ export class IssueSource {
   /**
    * Post a REQUEST_CHANGES review on the PR for the given issue.
    * Uses the GitHub API to attach the structured verdict + filtered inline comments.
-   * Best-effort: if inline-comment posting fails, falls back to a plain PR comment.
+   * Best-effort, two-stage fallback:
+   *   1. inline comments may fail when lines are no longer in the diff — retry
+   *      as a plain top-level review (no inline comments).
+   *   2. GitHub rejects REQUEST_CHANGES reviews from a PR's OWN AUTHOR
+   *      ("Review Can not request changes on your own pull request", HTTP 422)
+   *      — the normal case here, since this orchestrator's GH_TOKEN both opens
+   *      the PR and posts its AI review. A plain PR comment carries the same
+   *      feedback without that restriction, so it is the final fallback rather
+   *      than letting the verdict go unposted (confirmed live: both the inline
+   *      and body-only review attempts hit the identical 422 in that case).
    */
   async postPrReview(issueId: number, output: ReviewOutput): Promise<void> {
     const { stdout: prJson } = await this.gh([
@@ -254,16 +277,23 @@ export class IssueSource {
         ["api", `repos/{owner}/{repo}/pulls/${prInfo.number}/reviews`, "--method", "POST", "--input", "-"],
         JSON.stringify(reviewBody),
       );
+      return;
     } catch (err) {
-      // Inline comments may fail when lines are no longer in the diff; fall back to a
-      // plain top-level review without inline comments so the verdict is still visible.
       console.warn(`[issue-source] inline review post failed — falling back to body-only review:`, err);
+    }
+
+    try {
       const bodyOnly = { ...reviewBody, comments: [] };
       await this.ghWithInput(
         ["api", `repos/{owner}/{repo}/pulls/${prInfo.number}/reviews`, "--method", "POST", "--input", "-"],
         JSON.stringify(bodyOnly),
       );
+      return;
+    } catch (err) {
+      console.warn(`[issue-source] body-only review post also failed — falling back to a plain PR comment:`, err);
     }
+
+    await this.comment(issueId, formatReviewAsComment(output));
   }
 
   /** Open a PR for an already-pushed head branch. Returns the PR URL. */
