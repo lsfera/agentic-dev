@@ -129,7 +129,7 @@ test("claude tier agent gets ANTHROPIC_BASE_URL proxy override when HEADROOM_MOD
   process.env.HEADROOM_MODE = "conservative";
   try {
     const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
-    assert.deepEqual(input.agent.env, { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" });
+    assert.deepEqual(input.sandboxEnv, { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" });
   } finally {
     if (orig === undefined) delete process.env.HEADROOM_MODE;
     else process.env.HEADROOM_MODE = orig;
@@ -141,7 +141,7 @@ test("claude tier agent gets ANTHROPIC_BASE_URL proxy override when HEADROOM_MOD
   process.env.HEADROOM_MODE = "aggressive";
   try {
     const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
-    assert.deepEqual(input.agent.env, { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" });
+    assert.deepEqual(input.sandboxEnv, { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" });
   } finally {
     if (orig === undefined) delete process.env.HEADROOM_MODE;
     else process.env.HEADROOM_MODE = orig;

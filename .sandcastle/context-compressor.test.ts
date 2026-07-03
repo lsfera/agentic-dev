@@ -110,12 +110,12 @@ test("getCompressionCallback returns an async function (returns a Promise)", () 
   withMode("conservative", () => {
     const cb = getCompressionCallback();
     assert.ok(cb !== undefined);
-    // Verify it returns a Promise when called — we intercept the dynamic
-    // import by catching the rejection (headroom-ai is not installed in the
-    // test environment), confirming the async wrapper runs before erroring.
+    // An async function always returns a Promise synchronously, before any
+    // `await` inside it (here, the dynamic `import("headroom-ai")`) resolves
+    // or rejects — so this holds regardless of whether headroom-ai succeeds.
     const result = cb("test prompt");
     assert.ok(result instanceof Promise, "callback must return a Promise");
-    // Consume the rejection so node:test doesn't treat it as an unhandled error.
+    // Consume any rejection so node:test doesn't treat it as an unhandled error.
     result.catch(() => {});
   });
 });
