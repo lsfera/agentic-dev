@@ -26,6 +26,26 @@ import { getCompressionCallback } from "./context-compressor.js";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Force Claude Code to authenticate via CLAUDE_CODE_OAUTH_TOKEN (subscription,
+ * ADR-0003) instead of ANTHROPIC_API_KEY (pay-as-you-go). The reviewer runs via
+ * noSandbox() + sandcastle's top-level run(), which inherits the devcontainer's
+ * own process env — that env carries ANTHROPIC_API_KEY (ADR-0018 cockpit
+ * passthrough; also needed by the headroom proxy's own compress() calls, see
+ * ADR-0023) alongside CLAUDE_CODE_OAUTH_TOKEN (from .sandcastle/.env, resolved
+ * separately by sandcastle for agent auth). Claude Code prefers an explicit API
+ * key over the subscription token whenever both are present, so every review
+ * silently authenticated against the API key instead — and failed outright
+ * ("Credit balance is too low") once that key's balance ran out, masked by an
+ * unrelated "workspace not trusted" warning that always prints alongside it.
+ * Live-verified: clearing the key here (empty string, not omitting it — Claude
+ * Code only falls back to OAuth when the var is unset/empty) restores the
+ * working OAuth path. Confirmed this works on the top-level run() path (unlike
+ * SandboxRunner's createSandbox()+.run() path, where AgentProvider.env is
+ * silently ignored entirely — see sandbox-runner.ts's `sandboxEnv` field).
+ */
+const FORCE_OAUTH_ENV = { ANTHROPIC_API_KEY: "" };
+
 /** Standard Schema-compatible validator for the reviewer's structured output. */
 const reviewOutputSchema = {
   "~standard": {
@@ -200,7 +220,7 @@ export class ReviewerAdapter {
         const compressed = await compression(text);
 
         reviewResult = await run({
-          agent: claudeCode(model, { permissionMode: "auto" }),
+          agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
           sandbox: noSandbox(),
           cwd,
           prompt: compressed,
@@ -209,7 +229,7 @@ export class ReviewerAdapter {
         });
       } else {
         reviewResult = await run({
-          agent: claudeCode(model, { permissionMode: "auto" }),
+          agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
           sandbox: noSandbox(),
           cwd,
           ...passOneConfig,
@@ -239,7 +259,7 @@ export class ReviewerAdapter {
               cwd,
             })
           : await run({
-              agent: claudeCode(model, { permissionMode: "auto" }),
+              agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
               sandbox: noSandbox(),
               cwd,
               prompt: compressed,
@@ -256,7 +276,7 @@ export class ReviewerAdapter {
               },
             )
           : await run({
-              agent: claudeCode(model, { permissionMode: "auto" }),
+              agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
               sandbox: noSandbox(),
               cwd,
               promptFile: passTwoConfig.promptFile,
