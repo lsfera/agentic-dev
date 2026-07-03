@@ -123,3 +123,41 @@ test("claude tier agent gets no ANTHROPIC_BASE_URL override when HEADROOM_MODE i
   const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
   assert.deepEqual(input.agent.env, {});
 });
+
+test("claude tier agent gets ANTHROPIC_BASE_URL proxy override when HEADROOM_MODE=conservative", () => {
+  const orig = process.env.HEADROOM_MODE;
+  process.env.HEADROOM_MODE = "conservative";
+  try {
+    const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
+    assert.deepEqual(input.agent.env, { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" });
+  } finally {
+    if (orig === undefined) delete process.env.HEADROOM_MODE;
+    else process.env.HEADROOM_MODE = orig;
+  }
+});
+
+test("claude tier agent gets ANTHROPIC_BASE_URL proxy override when HEADROOM_MODE=aggressive", () => {
+  const orig = process.env.HEADROOM_MODE;
+  process.env.HEADROOM_MODE = "aggressive";
+  try {
+    const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
+    assert.deepEqual(input.agent.env, { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" });
+  } finally {
+    if (orig === undefined) delete process.env.HEADROOM_MODE;
+    else process.env.HEADROOM_MODE = orig;
+  }
+});
+
+test("local tier is never proxy-routed regardless of HEADROOM_MODE", () => {
+  const orig = process.env.HEADROOM_MODE;
+  process.env.HEADROOM_MODE = "conservative";
+  try {
+    // local tier uses opencode; ANTHROPIC_BASE_URL proxy injection only
+    // applies to the claudeCode agent path (sandbox-runner.ts L225 tier gate).
+    const input = buildAgentInput({ tier: "local" }, STUB_ISSUE);
+    assert.equal(input.agent.name, "opencode");
+  } finally {
+    if (orig === undefined) delete process.env.HEADROOM_MODE;
+    else process.env.HEADROOM_MODE = orig;
+  }
+});
