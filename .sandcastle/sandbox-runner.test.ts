@@ -8,7 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAgentInput } from "./sandbox-runner.ts";
+import { buildAgentInput, isTransientAgentError } from "./sandbox-runner.ts";
 
 const STUB_ISSUE = { number: 42, title: "Fix the bug", body: "Detailed description" };
 
@@ -160,4 +160,32 @@ test("local tier is never proxy-routed regardless of HEADROOM_MODE", () => {
     if (orig === undefined) delete process.env.HEADROOM_MODE;
     else process.env.HEADROOM_MODE = orig;
   }
+});
+
+// ─── isTransientAgentError ───────────────────────────────────────────────────
+
+test("isTransientAgentError: true for a network/server disconnect", () => {
+  assert.equal(isTransientAgentError(new Error("API Error: Server disconnected")), true);
+});
+
+test("isTransientAgentError: true for common connection-reset style messages", () => {
+  assert.equal(isTransientAgentError(new Error("read ECONNRESET")), true);
+  assert.equal(isTransientAgentError(new Error("connect ETIMEDOUT 1.2.3.4:443")), true);
+  assert.equal(isTransientAgentError(new Error("socket hang up")), true);
+  assert.equal(isTransientAgentError(new Error("fetch failed")), true);
+});
+
+test("isTransientAgentError: false for a session-limit failure — retrying now can't help", () => {
+  assert.equal(
+    isTransientAgentError(new Error("You've hit your session limit · resets 12:20pm (UTC)")),
+    false,
+  );
+});
+
+test("isTransientAgentError: false for an unrelated/logic error", () => {
+  assert.equal(isTransientAgentError(new Error("claude-code exited with code 1: some other reason")), false);
+});
+
+test("isTransientAgentError: false for a non-Error thrown value", () => {
+  assert.equal(isTransientAgentError("just a string"), false);
 });
