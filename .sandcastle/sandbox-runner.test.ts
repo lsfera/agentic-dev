@@ -119,9 +119,9 @@ test("promptArgs MEMORY_CONTEXT defaults to the no-memory placeholder when omitt
   assert.equal(input.promptArgs["MEMORY_CONTEXT"], "(no prior memory for this repo)");
 });
 
-test("claude tier agent gets no ANTHROPIC_BASE_URL override when HEADROOM_MODE is off (default)", () => {
+test("claude tier: no sandboxEnv override when HEADROOM_MODE is off (default)", () => {
   const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
-  assert.deepEqual(input.agent.env, {});
+  assert.equal(input.sandboxEnv, undefined);
 });
 
 test("claude tier agent gets ANTHROPIC_BASE_URL proxy override when HEADROOM_MODE=conservative", () => {

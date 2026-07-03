@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, IN_PROGRESS_LABEL, IN_REVIEW_LABEL, reviewVerdict, reconcileFromLabels, type State, type CiStatus, type Pr, type ReviewOutput } from "./reduce.ts";
-import { parseBlockedBy } from "./issue-source.ts";
+import { parseBlockedBy, formatReviewAsComment } from "./issue-source.ts";
 import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, withRetry, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode, resolveDockerHost } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
@@ -102,6 +102,40 @@ test("parseBlockedBy: stops at next markdown section", () => {
   assert.deepEqual(
     parseBlockedBy("## Blocked by\n\n- #1\n\n## Other section\n\n- #99\n"),
     [1],
+  );
+});
+
+// ─── formatReviewAsComment ───────────────────────────────────────────────────
+
+test("formatReviewAsComment: no comments — just verdict and summary", () => {
+  const rendered = formatReviewAsComment({ verdict: "pass", summary: "Looks good.", comments: [] });
+  assert.equal(rendered, "**AI review: pass**\n\nLooks good.");
+});
+
+test("formatReviewAsComment: includes each comment with path:line", () => {
+  const rendered = formatReviewAsComment({
+    verdict: "changes-requested",
+    summary: "One issue found.",
+    comments: [{ path: "src/foo.ts", line: 42, body: "This is wrong." }],
+  });
+  assert.equal(
+    rendered,
+    "**AI review: changes-requested**\n\nOne issue found.\n\n---\n**src/foo.ts:42** — This is wrong.",
+  );
+});
+
+test("formatReviewAsComment: multiple comments joined with blank lines", () => {
+  const rendered = formatReviewAsComment({
+    verdict: "changes-requested",
+    summary: "Two issues.",
+    comments: [
+      { path: "a.ts", line: 1, body: "first" },
+      { path: "b.ts", line: 2, body: "second" },
+    ],
+  });
+  assert.equal(
+    rendered,
+    "**AI review: changes-requested**\n\nTwo issues.\n\n---\n**a.ts:1** — first\n\n**b.ts:2** — second",
   );
 });
 
