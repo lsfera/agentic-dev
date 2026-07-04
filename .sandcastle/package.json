@@ -18,7 +18,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@ai-hero/sandcastle": "^0.10.0",
+    "@ai-hero/sandcastle": "^0.12.0",
     "headroom-ai": "^0.1.0"
   }
 }
