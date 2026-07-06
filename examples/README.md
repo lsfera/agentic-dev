@@ -12,6 +12,7 @@ per-example notes), then launch with `afk` / `hitl`.
 | Contributor / air-gapped / custom image | [`build-from-source/`](build-from-source/) | claude | built `:local` | builds images yourself |
 | Reproducible — lock versions | [`pinned-reproducible/`](pinned-reproducible/) | claude | pinned `:vX.Y.Z` | inner **and** outer image pinned |
 | Many issues in parallel | [`parallel-throughput/`](parallel-throughput/) | claude | prebuilt GHCR `:latest` | `AGENTIC_CONCURRENCY` > 1 |
+| Non-TypeScript target project (dotnet) | [`dotnet-project/`](dotnet-project/) | claude | built `Dockerfile.dotnet` `:local` | targets an external repo via `AGENTIC_REPO` |
 
 ## Common to every example
 
