@@ -14,6 +14,10 @@
  *   AGENTIC_BASE_BRANCH   PR base branch (default: main)
  *   AGENTIC_MODEL         claudeCode model (default: claude-sonnet-4-6)
  *   SANDCASTLE_IMAGE      inner image (default: sandcastle:local)
+ *   SANDCASTLE_CONTAINER_UID  inner image's non-root UID (default: 1000, sandcastle's
+ *                             own default — only needed when a custom image renames its
+ *                             user to a different UID, e.g. the dotnet SDK base's 1654)
+ *   SANDCASTLE_CONTAINER_GID  matching GID (default: 1000)
  *   AGENTIC_CONCURRENCY   max parallel sandboxes (default: 1, serial)
  *   SMEE_URL              smee.io channel URL (enables event-driven mode)
  *   WEBHOOK_SECRET        shared HMAC secret for X-Hub-Signature-256 validation
@@ -603,6 +607,12 @@ async function main(): Promise<void> {
 
   const issues = new IssueSource(repo);
   const tier = (process.env.AGENTIC_TIER ?? "claude") as "claude" | "local";
+  const containerUid = process.env.SANDCASTLE_CONTAINER_UID
+    ? Number(process.env.SANDCASTLE_CONTAINER_UID)
+    : undefined;
+  const containerGid = process.env.SANDCASTLE_CONTAINER_GID
+    ? Number(process.env.SANDCASTLE_CONTAINER_GID)
+    : undefined;
   const runner = new SandboxRunner({
     imageName: process.env.SANDCASTLE_IMAGE,
     model: process.env.AGENTIC_MODEL,
@@ -611,6 +621,8 @@ async function main(): Promise<void> {
     localImageName: process.env.SANDCASTLE_OPENCODE_IMAGE,
     cwd: repoRoot,
     network,
+    containerUid,
+    containerGid,
   });
 
   const reviewer = new ReviewerAdapter({
