@@ -120,12 +120,13 @@ services:
   # rather than always-on because HEADROOM_MODE defaults to "off": most runs never
   # touch it, and pulling+running an idle container for everyone isn't worth it.
   # Image per https://headroomlabs-ai.github.io/headroom/docker-install/.
-  # Needs its own LLM credential to actually perform compression (it calls the
-  # model, e.g. claude-sonnet-4-6, itself) — CLAUDE_CODE_OAUTH_TOKEN (subscription,
-  # ADR-0003) does NOT work here, only an API key. A user relying purely on the
-  # subscription token has no key to give it; compression will fail to configure
-  # and headroom-ai's client-side fallback (compressed: false) keeps prompts
-  # uncompressed rather than blocking the run.
+  # ANTHROPIC_API_KEY below is OPTIONAL as of headroom 0.27.0 (verified via
+  # source read + a live round trip, see ADR-0023's 2026-07-05 addendum): the
+  # proxy classifies CLAUDE_CODE_OAUTH_TOKEN traffic (subscription, ADR-0003)
+  # as its own "SUBSCRIPTION" auth mode and forwards that Authorization header
+  # upstream unchanged — compression itself runs a local ONNX model, not a
+  # live LLM call, so no proxy-owned credential is consulted either way. Kept
+  # here only in case a future backend/feature genuinely needs it; empty is fine.
   headroom:
     image: ghcr.io/chopratejas/headroom:latest
     profiles: ["headroom"]
