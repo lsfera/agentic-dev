@@ -1,0 +1,52 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+
+# Lean inner image (ADR-0002 addendum, ADR-0024): dotnet target-project recipe.
+# Lean official upstream SDK image, not a sibling devcontainer-dotnet8-style
+# VS Code devcontainer base (too heavy, never built as an agent sandbox).
+# git for the agent's checkout + commit work; curl to install the Claude
+# Code CLI below (curl already ships in this base image, but installed
+# explicitly for parity with the default Dockerfile's intent). No `gh` and
+# no SSH mount, matching the default Dockerfile — the orchestrator pushes
+# the branch and opens the PR with the outer devcontainer's gh + SSH auth.
+RUN apt-get update && apt-get install -y \
+  git \
+  curl \
+  && rm -rf /var/lib/apt/lists/*
+
+# Identifying label — lets the orchestrator find and sweep containers from this
+# image with `docker ps --filter label=agentic.sandbox=1` on startup/shutdown.
+LABEL "agentic.sandbox"="1"
+
+# Project dimension (#40) — scopes the orphan sweep so concurrent projects don't
+# reap each other's in-flight sandboxes. Pass `--build-arg AGENTIC_PROJECT=<name>`
+# per project; the empty default marks the image as unowned.
+ARG AGENTIC_PROJECT=""
+LABEL "agentic.sandbox.project"="${AGENTIC_PROJECT}"
+
+# Build-args for UID/GID alignment, same purpose as the default Dockerfile's
+# AGENT_UID/AGENT_GID (host user's UID/GID so image-built files and
+# bind-mounted worktree files share an owner without a runtime chown). The
+# default here is 1654, not 1000 — mcr.microsoft.com/dotnet/sdk:8.0 ships its
+# own pre-existing non-root user `app` at uid=1654 gid=1654 (confirmed via
+# `docker run mcr.microsoft.com/dotnet/sdk:8.0 id`), unlike the Node base
+# image's `node` user at uid=1000. Following this repo's "rename if present"
+# policy means renaming *that* user, so the default here matches its actual
+# UID/GID rather than blindly reusing the Node image's 1000.
+ARG AGENT_UID=1654
+ARG AGENT_GID=1654
+
+# Rename the base image's existing "app" user to "agent" and align UID/GID.
+RUN groupmod -o -g $AGENT_GID app && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent app
+USER ${AGENT_UID}:${AGENT_GID}
+
+# Claude Code CLI — the agent the orchestrator drives via claudeCode(). Native
+# installer, no Node/npm dependency, so it works unmodified on this non-Node
+# base image.
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/home/agent/.local/bin:$PATH"
+
+WORKDIR /home/agent
+
+# In branch/worktree mode sandcastle bind-mounts the git worktree at
+# /home/agent/workspace and sets it as the working directory at container start.
+ENTRYPOINT ["sleep", "infinity"]
