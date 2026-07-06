@@ -316,12 +316,12 @@ Off by default (`HEADROOM_MODE=off`). When enabled, [headroom-ai](https://github
 
 **Prerequisites**
 
-- An `ANTHROPIC_API_KEY` — the proxy performs compression by calling an LLM itself, so `CLAUDE_CODE_OAUTH_TOKEN` (the default subscription auth, ADR-0003) does not work for it. Without a key the proxy silently falls back to uncompressed traffic rather than blocking a run.
+None beyond `CLAUDE_CODE_OAUTH_TOKEN` (the default subscription auth, ADR-0003) — the proxy classifies subscription traffic as its own auth mode and forwards it to Anthropic unchanged; compression runs a local model, not a live LLM call. `ANTHROPIC_API_KEY` is optional and not required for this path (see ADR-0023's addendum).
 
 **Run the proxy (opt-in compose profile)**
 
 ```bash
-HEADROOM_MODE=conservative ANTHROPIC_API_KEY=sk-... \
+HEADROOM_MODE=conservative \
   docker compose -f .devcontainer/docker-compose.yml --profile headroom up
 ```
 
@@ -336,7 +336,7 @@ The `headroom` service is only started with `--profile headroom` — a bare `doc
 
 The *inner* sandbox reaches the proxy differently — via `host.docker.internal:8787` (same mechanism the local/Ollama tier uses, since it's a docker-outside-of-docker sibling container on a separate network from the compose project). Confirm the proxy container is up with `docker compose -f .devcontainer/docker-compose.yml --profile headroom ps`.
 
-**Known limitation:** whether `CLAUDE_CODE_OAUTH_TOKEN`'s subscription-OAuth flow survives being routed through the proxy has not been live-tested — see ADR-0023's Consequences before relying on this for an OAuth-only setup.
+Live-verified (ADR-0023's addendum): `CLAUDE_CODE_OAUTH_TOKEN`'s subscription-OAuth flow survives being routed through the proxy — no `ANTHROPIC_API_KEY` needed for a subscription-only setup.
 
 ## Example configurations
 
