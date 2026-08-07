@@ -8,10 +8,16 @@ in a Docker sandbox, and GitHub issues hold the durable state.
 
 ## TL;DR
 
-Drop [`.devcontainer/docker-compose.yml`](.devcontainer/docker-compose.yml) into your
+Download [`.devcontainer/docker-compose.yml`](.devcontainer/docker-compose.yml) into your
 project (it points at the published image), set your GitHub + Claude credentials, then:
 
 ```bash
+mkdir -p .devcontainer
+curl -fsSL -o .devcontainer/docker-compose.yml \
+  https://raw.githubusercontent.com/lsfera/agentic-dev/main/.devcontainer/docker-compose.yml
+# or: wget -O .devcontainer/docker-compose.yml \
+#       https://raw.githubusercontent.com/lsfera/agentic-dev/main/.devcontainer/docker-compose.yml
+
 docker compose -f .devcontainer/docker-compose.yml up -d   # standalone — no .env, no init.sh
 #  …drive the workflow with Claude:
 #  /grill-me-with-docs → /to-prd → /to-issues → /afk | /hitl …
