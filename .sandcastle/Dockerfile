@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 # Lean inner image (ADR-0002): git for the agent's checkout + commit work, and
 # curl only to install the Claude Code CLI below. No `gh` and no SSH mount in
