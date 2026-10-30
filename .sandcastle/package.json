@@ -19,6 +19,6 @@
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.12.0",
-    "headroom-ai": "^0.1.0"
+    "headroom-ai": "^0.42.0"
   }
 }
