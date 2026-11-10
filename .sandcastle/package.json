@@ -12,10 +12,10 @@
     "test:integration": "SANDCASTLE_INTEGRATION=1 node --import tsx --test integration.test.ts"
   },
   "devDependencies": {
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.6.6",
     "patch-package": "^8.0.1",
-    "tsx": "^4.22.4",
-    "typescript": "^7.0.0"
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.14.0",

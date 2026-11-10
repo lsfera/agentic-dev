@@ -120,8 +120,15 @@ test("promptArgs MEMORY_CONTEXT defaults to the no-memory placeholder when omitt
 });
 
 test("claude tier: no sandboxEnv override when HEADROOM_MODE is off (default)", () => {
-  const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
-  assert.equal(input.sandboxEnv, undefined);
+  const orig = process.env.HEADROOM_MODE;
+  delete process.env.HEADROOM_MODE;
+  try {
+    const input = buildAgentInput({ tier: "claude" }, STUB_ISSUE);
+    assert.equal(input.sandboxEnv, undefined);
+  } finally {
+    if (orig === undefined) delete process.env.HEADROOM_MODE;
+    else process.env.HEADROOM_MODE = orig;
+  }
 });
 
 test("claude tier agent gets ANTHROPIC_BASE_URL proxy override when HEADROOM_MODE=conservative", () => {

@@ -287,7 +287,7 @@ Pull the prebuilt `sandbox-opencode` image or build it locally — see
 docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
 ```
 
-This image ships the `opencode` CLI (pinned `opencode-ai@1.17.9`) instead of Claude Code. The provider config in `.sandcastle/opencode.json` points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
+This image ships the `opencode` CLI (pinned `opencode-ai@1.19.5`) instead of Claude Code. The provider config in `.sandcastle/opencode.json` points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
 
 **Run the orchestrator on the local tier**
 

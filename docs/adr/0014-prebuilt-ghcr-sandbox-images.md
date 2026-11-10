@@ -38,6 +38,6 @@ project opts in by setting those to a GHCR ref.
   it). A project that needs an owned image still builds locally with the build-arg.
 - GHCR packages are private by default; publishing for public consumption is a
   one-time per-package visibility change in the repo's package settings.
-- Pinning still matters: `Dockerfile.opencode` pins `opencode-ai@1.17.9` for the
+- Pinning still matters: `Dockerfile.opencode` pins `opencode-ai@1.19.5` for the
   CLI shape sandcastle 0.10.0 emits; bumping it is a deliberate, re-verified change
   (see that file's comment), and a published tag freezes whatever was pinned.
