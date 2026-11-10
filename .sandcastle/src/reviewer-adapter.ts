@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { reviewVerdict, type ReviewOutput, type ReviewVerdict } from "./reduce.ts";
-import { getCompressionCallback } from "./context-compressor.js";
+import { getCompressionCallback } from "./context-compressor.ts";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 

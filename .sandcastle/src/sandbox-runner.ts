@@ -27,7 +27,7 @@ import { createSandbox, claudeCode, opencode, type AgentProvider, type PromptArg
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { getCompressionCallback, isCompressionActive } from "./context-compressor.js";
+import { getCompressionCallback, isCompressionActive } from "./context-compressor.ts";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { retryEffect } from "./retry.ts";

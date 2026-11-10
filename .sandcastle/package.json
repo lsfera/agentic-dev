@@ -8,7 +8,7 @@
     "postinstall": "patch-package",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/reduce.test.ts src/sandbox-runner.test.ts src/reviewer-adapter.test.ts src/memory.test.ts src/memory-store.test.ts src/run-sh.test.ts src/init-sh.test.ts src/up-sh.test.ts src/afk-cmd.test.ts src/context-compressor.test.ts src/retry.test.ts",
+    "test": "node --import tsx --test src/reduce.test.ts src/sandbox-runner.test.ts src/reviewer-adapter.test.ts src/memory.test.ts src/memory-store.test.ts src/run-sh.test.ts src/init-sh.test.ts src/up-sh.test.ts src/afk-cmd.test.ts src/context-compressor.test.ts src/retry.test.ts src/issue-source.test.ts src/main-loop.test.ts",
     "test:integration": "SANDCASTLE_INTEGRATION=1 node --import tsx --test src/integration.test.ts"
   },
   "devDependencies": {

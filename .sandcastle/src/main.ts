@@ -715,7 +715,12 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
   const seenDeliveries = new Set<string>();
   // Background fibers (per-issue workers, boot-time re-reviews). Awaited before
   // a clean exit so no in-progress work is cut short.
-  const background: Fiber.Fiber<void, never>[] = [];
+  const background = new Set<Fiber.Fiber<void, never>>();
+  const track = (fiber: Fiber.Fiber<void, never>) => {
+    background.add(fiber);
+    fiber.addObserver(() => { background.delete(fiber); });
+    return fiber;
+  };
 
   const policy: Policy = { concurrency: parseConcurrency(), mode };
 
@@ -901,7 +906,7 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
           const followUps = reduce(reconcileState, { type: "ReviewFinished", issue: n, pr, verdict });
           yield* applyReviewActions(followUps, n, output, prefix);
         });
-        background.push(yield* Effect.forkChild(rereview));
+        track(yield* Effect.forkChild(rereview));
       }
     }
   }
@@ -1062,7 +1067,7 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
     if (actions.some((a) => a.type === "Stop")) {
       console.log(`[${mode}] nothing ready, nothing in flight — done.`);
       // Let any background work (e.g. boot-time re-reviews) finish first.
-      yield* Fiber.awaitAll(background);
+      yield* Fiber.awaitAll([...background]);
       // Shutdown sweep: confirm no containers linger after a clean exit.
       yield* sweepOrphanedSandboxesEffect(sh as ShellExec, project);
       return;
@@ -1097,7 +1102,7 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
       const n = start.issueId;
       inFlight.push(n);
       console.log(`[${mode}] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
-      background.push(yield* Effect.forkChild(handleIssue(n, { ready, allPrs })));
+      track(yield* Effect.forkChild(handleIssue(n, { ready, allPrs })));
     }
 
     // Sleep before the next reconciliation poll.
