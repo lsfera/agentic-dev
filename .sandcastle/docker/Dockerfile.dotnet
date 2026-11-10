@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:8.0
+FROM mcr.microsoft.com/dotnet/sdk:11.0
 
 # Lean inner image (ADR-0002 addendum, ADR-0024): dotnet target-project recipe.
 # Lean official upstream SDK image, not a sibling devcontainer-dotnet8-style
