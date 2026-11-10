@@ -39,7 +39,7 @@ jobs:
           - variant: sandbox-opencode
             dockerfile: Dockerfile.opencode
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up QEMU (cross-arch builds)
         uses: docker/setup-qemu-action@v3
