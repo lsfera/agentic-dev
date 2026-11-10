@@ -62,4 +62,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build ${{ matrix.dockerfile }} (no push)
-        run: docker build -f .sandcastle/docker/${{ matrix.dockerfile }} -t "ci-${{ matrix.dockerfile }}" .sandcastle
+        run: docker build -f .sandcastle/docker/${{ matrix.dockerfile }} -t "ci-$(echo "${{ matrix.dockerfile }}" | tr "[:upper:]" "[:lower:]")" .sandcastle
