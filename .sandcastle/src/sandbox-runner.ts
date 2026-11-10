@@ -201,7 +201,7 @@ export function buildAgentInput(
             "cp opencode.json \"$HOME/.config/opencode/opencode.json\"",
         },
       ],
-      promptFile: join(_dir, "prompt-local.md"),
+      promptFile: join(_dir, "..", "prompts", "prompt-local.md"),
       promptArgs,
     };
   }
@@ -235,7 +235,7 @@ export function buildAgentInput(
     sandboxEnv: isCompressionActive()
       ? { ANTHROPIC_BASE_URL: "http://host.docker.internal:8787" }
       : undefined,
-    promptFile: join(_dir, "prompt-claude.md"),
+    promptFile: join(_dir, "..", "prompts", "prompt-claude.md"),
     promptArgs,
   };
 }

@@ -11,9 +11,9 @@ inner image — no GHCR pull involved.
 
    ```bash
    # Claude tier:
-   docker build -f .sandcastle/Dockerfile          -t sandcastle:local          .sandcastle
+   docker build -f .sandcastle/docker/Dockerfile          -t sandcastle:local          .sandcastle
    # Local/Ollama tier (optional):
-   docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
+   docker build -f .sandcastle/docker/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
    ```
 
    To make the image **owned** (so the #40 orphan sweep won't let another project

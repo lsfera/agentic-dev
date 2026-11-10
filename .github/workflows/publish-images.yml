@@ -15,8 +15,8 @@ on:
     # Only rebuild when something that affects an inner image changes. The build
     # context is .sandcastle, so scope the path filter to it.
     paths:
-      - ".sandcastle/Dockerfile"
-      - ".sandcastle/Dockerfile.opencode"
+      - ".sandcastle/docker/Dockerfile"
+      - ".sandcastle/docker/Dockerfile.opencode"
       - ".github/workflows/publish-images.yml"
   workflow_dispatch:
 
@@ -72,7 +72,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: ./.sandcastle
-          file: ./.sandcastle/${{ matrix.dockerfile }}
+          file: ./.sandcastle/docker/${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

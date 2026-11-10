@@ -14,7 +14,7 @@ import { mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const sh = promisify(execFile);
-const INIT = join(dirname(fileURLToPath(import.meta.url)), "..", ".devcontainer", "init.sh");
+const INIT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".devcontainer", "init.sh");
 
 /** Make a real dir whose basename is `name`, return its absolute path. */
 async function folderNamed(name: string): Promise<string> {

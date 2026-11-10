@@ -13,7 +13,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const sh = promisify(execFile);
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const UP = join(REPO_ROOT, "up.sh");
 // The checkout basename varies (local 'agentic.dev', CI 'agentic-dev'), so derive
 // the expected container name the same way init.sh does instead of hardcoding it.

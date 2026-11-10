@@ -166,7 +166,7 @@ function detachAndRelaunch(mode: string): void {
 
   const logFd = openSync(logPath, 'w');
 
-  const tsxBin = join(dirname(fileURLToPath(import.meta.url)), 'node_modules', '.bin', 'tsx');
+  const tsxBin = join(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', '.bin', 'tsx');
   const mainTs = fileURLToPath(import.meta.url);
 
   // Strip the cockpit marker so the child resolves 'foreground' and runs the

@@ -28,7 +28,7 @@ dotnet project's own checkout**, not from `agentic-dev`'s.
    produces a local Docker image):
 
    ```bash
-   docker build -f .sandcastle/Dockerfile.dotnet -t sandcastle-dotnet:local .sandcastle
+   docker build -f .sandcastle/docker/Dockerfile.dotnet -t sandcastle-dotnet:local .sandcastle
    ```
 
    To make the image **owned** (so the #40 orphan sweep won't let another
@@ -61,12 +61,12 @@ export SANDCASTLE_IMAGE=sandcastle-dotnet:local
 export AGENTIC_REPO=owner/your-dotnet-project
 export SANDCASTLE_CONTAINER_UID=1654   # matches Dockerfile.dotnet's AGENT_UID
 export SANDCASTLE_CONTAINER_GID=1654
-/path/to/agentic-dev/.sandcastle/node_modules/.bin/tsx /path/to/agentic-dev/.sandcastle/main.ts
+/path/to/agentic-dev/.sandcastle/node_modules/.bin/tsx /path/to/agentic-dev/.sandcastle/src/main.ts
 ```
 
 (If your target project instead has its own `.devcontainer/` built from
 `agentic-dev`'s published image, the baked-in `afk`/`hitl` shell launchers
-work the same way — they resolve `.sandcastle/main.ts` relative to that
+work the same way — they resolve `.sandcastle/src/main.ts` relative to that
 project's own workspace, so cwd is already correct.)
 
 ## Adapting this to another language

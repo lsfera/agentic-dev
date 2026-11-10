@@ -14,7 +14,7 @@ import { mkdtemp, mkdir, writeFile, symlink, chmod, realpath } from "node:fs/pro
 import { tmpdir } from "node:os";
 
 const sh = promisify(execFile);
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AFK = join(REPO_ROOT, ".devcontainer", "afk");
 
 /** Run the launcher (at `bin`, name decides the mode) from `cwd` with --print-target. */

@@ -205,8 +205,8 @@ curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].t
 pull. Build them from the `.sandcastle` context:
 
 ```bash
-docker build -f .sandcastle/Dockerfile          -t sandcastle:local          .sandcastle
-docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
+docker build -f .sandcastle/docker/Dockerfile          -t sandcastle:local          .sandcastle
+docker build -f .sandcastle/docker/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
 ```
 
 A project that needs an **owned** image (so the #40 orphan sweep won't let another
@@ -284,10 +284,10 @@ Pull the prebuilt `sandbox-opencode` image or build it locally — see
 [Inner sandbox images](#inner-sandbox-images). The local build is:
 
 ```bash
-docker build -f .sandcastle/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
+docker build -f .sandcastle/docker/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
 ```
 
-This image ships the `opencode` CLI (pinned `opencode-ai@1.19.5`) instead of Claude Code. The provider config in `.sandcastle/opencode.json` points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
+This image ships the `opencode` CLI (pinned `opencode-ai@1.19.5`) instead of Claude Code. The provider config in `opencode.json` (repo root) points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
 
 **Run the orchestrator on the local tier**
 
@@ -314,7 +314,7 @@ The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk l
 | `AGENTIC_LOCAL_MODEL` | `ollama/qwen3-coder:30b` | opencode model ref (`ollama/<model>`); the model must exist in `ollama list`. |
 | `SANDCASTLE_OPENCODE_IMAGE` | `sandcastle-opencode:local` | Inner image for the local tier. |
 
-To add a model, pull it in Ollama and add it to the `models` map in `.sandcastle/opencode.json`, then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
+To add a model, pull it in Ollama and add it to the `models` map in `opencode.json` (repo root), then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
 
 ## Context compression (headroom)
 

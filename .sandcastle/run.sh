@@ -94,12 +94,12 @@ cd "${LOCAL_WORKSPACE_FOLDER:-$REPO_ROOT}"
 # vendoring the *.ts at all. Either way config (orchestrator.env / .env /
 # opencode.json) comes from the project's .sandcastle/, never from the baked copy.
 ORCH_HOME="${AGENTIC_ORCHESTRATOR_HOME:-/opt/agentic-orchestrator}"
-if [ -f "$PWD/.sandcastle/main.ts" ]; then
+if [ -f "$PWD/.sandcastle/src/main.ts" ]; then
   ORCH_DIR="$PWD/.sandcastle"
-elif [ -f "$ORCH_HOME/main.ts" ]; then
+elif [ -f "$ORCH_HOME/src/main.ts" ]; then
   ORCH_DIR="$ORCH_HOME"
 else
-  echo "run.sh: no orchestrator found — expected .sandcastle/main.ts in the project or a baked $ORCH_HOME" >&2
+  echo "run.sh: no orchestrator found — expected .sandcastle/src/main.ts in the project or a baked $ORCH_HOME" >&2
   exit 1
 fi
 
@@ -137,4 +137,4 @@ fi
 
 resolve_overrides  # arguments override anything orchestrator.env set
 
-exec "$ORCH_DIR/node_modules/.bin/tsx" "$ORCH_DIR/main.ts"
+exec "$ORCH_DIR/node_modules/.bin/tsx" "$ORCH_DIR/src/main.ts"

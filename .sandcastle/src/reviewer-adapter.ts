@@ -161,7 +161,7 @@ export function buildReviewerPassOneConfig(
 ): ReviewerPassOneConfig {
   const baseBranch = opts.baseBranch ?? "main";
   return {
-    promptFile: join(_dir, "review-prompt.md"),
+    promptFile: join(_dir, "..", "prompts", "review-prompt.md"),
     promptArgs: {
       ISSUE_NUMBER: String(input.issueNumber),
       ISSUE_TITLE: input.issueTitle,
@@ -183,7 +183,7 @@ export function buildReviewerPassOneConfig(
  */
 export function buildReviewerPassTwoConfig(input: ReviewInput): ReviewerPassTwoConfig {
   return {
-    promptFile: join(_dir, "review-extraction.md"),
+    promptFile: join(_dir, "..", "prompts", "review-extraction.md"),
     name: `review-extract-${input.issueNumber}`,
   };
 }
@@ -212,7 +212,7 @@ export class ReviewerAdapter {
     try {
       // Pre-read template, resolve args, optionally compress — outside sandcastle's Effect generators.
       if (compression) {
-        const raw = await readFile(join(_dir, "review-prompt.md"), "utf8");
+        const raw = await readFile(join(_dir, "..", "prompts", "review-prompt.md"), "utf8");
         let text = raw;
         for (const [key, value] of Object.entries(passOneConfig.promptArgs)) {
           text = text.replaceAll(`{{${key}}}`, String(value));
@@ -269,7 +269,7 @@ export class ReviewerAdapter {
       } else {
         extractResult = reviewResult.resume
           ? await reviewResult.resume(
-              await loadPromptFile(join(_dir, "review-extraction.md")),
+              await loadPromptFile(join(_dir, "..", "prompts", "review-extraction.md")),
               {
                 output: Output.object({ tag: "output", schema: reviewOutputSchema }),
                 cwd,

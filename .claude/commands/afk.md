@@ -39,7 +39,7 @@ afk … --dry-run` prints the resolved `AGENTIC_*` env without launching.
   `gh` calls (issues/labels/PRs). See `.sandcastle/orchestrator.env.example`.
   Kept separate from `.sandcastle/.env` so the token never reaches the sandboxes.
 - The inner image exists. Build it once inside the devcontainer:
-  `/exec` → `docker build -t sandcastle:local -f .sandcastle/Dockerfile .sandcastle`
+  `/exec` → `docker build -t sandcastle:local -f .sandcastle/docker/Dockerfile .sandcastle`
   (or `npx @ai-hero/sandcastle build-image`).
 
 ## Run
@@ -86,7 +86,7 @@ When `AGENTIC_TIER=local`, the local-tier image must exist and Ollama must be
 reachable from the devcontainer at `host.docker.internal:11434`:
 
 ```
-docker build -t sandcastle-opencode:local -f .sandcastle/Dockerfile.opencode .sandcastle
+docker build -t sandcastle-opencode:local -f .sandcastle/docker/Dockerfile.opencode .sandcastle
 ```
 
 The `opencode.json` at the repo root is copied into each worktree automatically

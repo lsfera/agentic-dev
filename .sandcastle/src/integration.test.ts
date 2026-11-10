@@ -22,11 +22,11 @@ import { ReviewerAdapter } from "./reviewer-adapter.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const enabled = !!process.env.SANDCASTLE_INTEGRATION;
 
-// The repo root is the parent of this `.sandcastle/` dir. Anchor sandcastle's
+// The repo root is the grandparent of this `.sandcastle/src/` dir. Anchor sandcastle's
 // cwd here regardless of where the test runner is invoked from (npm runs it
 // from `.sandcastle/`); the live orchestrator gets this for free by running
 // from the repo root.
-const repoRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolve(import.meta.dirname, "..", "..");
 
 test(
   "sandbox round-trip: agent commits to agent/issue-<N>",

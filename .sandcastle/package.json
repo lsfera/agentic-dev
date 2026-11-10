@@ -6,10 +6,10 @@
   "description": "Sandcastle-based /afk orchestrator: works each ready-for-agent issue in its own disposable, git-isolated sandbox and opens a PR per issue.",
   "scripts": {
     "postinstall": "patch-package",
-    "start": "tsx main.ts",
+    "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test reduce.test.ts sandbox-runner.test.ts reviewer-adapter.test.ts memory.test.ts memory-store.test.ts run-sh.test.ts init-sh.test.ts up-sh.test.ts afk-cmd.test.ts context-compressor.test.ts retry.test.ts",
-    "test:integration": "SANDCASTLE_INTEGRATION=1 node --import tsx --test integration.test.ts"
+    "test": "node --import tsx --test src/reduce.test.ts src/sandbox-runner.test.ts src/reviewer-adapter.test.ts src/memory.test.ts src/memory-store.test.ts src/run-sh.test.ts src/init-sh.test.ts src/up-sh.test.ts src/afk-cmd.test.ts src/context-compressor.test.ts src/retry.test.ts",
+    "test:integration": "SANDCASTLE_INTEGRATION=1 node --import tsx --test src/integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

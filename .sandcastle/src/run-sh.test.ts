@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const sh = promisify(execFile);
-const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "run.sh");
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "run.sh");
 
 /** Run run.sh --dry-run with args; return the AGENTIC_* env as a map. */
 async function resolve(args: string[]): Promise<Record<string, string>> {
