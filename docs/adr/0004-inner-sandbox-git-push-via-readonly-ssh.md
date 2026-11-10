@@ -7,6 +7,7 @@ The usual objection — private key material spread across disposable, parallel 
 ## Decisions
 
 - Read-only **bind mount** of `~/.ssh`, not ssh-agent forwarding (forwarding across nested Docker is brittle).
+  *(The outer devcontainer itself now forwards the host ssh-agent instead of mounting `~/.ssh` — see ADR-0026.)*
 - Key lives at `$HOME/.ssh`, outside the repo, so the push-capable agent cannot commit it.
 
 ## Consequences

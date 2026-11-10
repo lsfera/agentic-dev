@@ -24,7 +24,7 @@ docker compose -f .devcontainer/docker-compose.yml up -d   # standalone — no .
 docker compose -f .devcontainer/docker-compose.yml down
 ```
 
-Every variable in the compose file carries a fallback (`${PWD}`, `${HOME}/.ssh`, …), so a
+Every variable in the compose file carries a fallback (`${PWD}`, `${HOME}/.devcontainer-claude`, …), so a
 bare `docker compose up` works with no generated `.env`. Grab a ready-made setup from
 [`examples/`](examples/), or see [Outer orchestrator image](#outer-orchestrator-image)
 to pin a release instead of `:latest`.
@@ -147,7 +147,7 @@ Supporting commands:
 | `code.sh` | Optional: attach VS Code to a running sandbox at its workspace folder. |
 | `.devcontainer/init.sh` | Host `initializeCommand`: derives the per-project `DEVCONTAINER_NAME` and writes `.devcontainer/.env`. `--dry-run` prints the resolved names without side effects. |
 | `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup` and the `afk`/`hitl` launchers. When built for publishing (`BAKE_ORCHESTRATOR=1`) it also bakes the orchestrator source + workflow commands + upstream skills (ADR-0016/0017). |
-| `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), SSH (ro), Claude persist dir, Docker socket. Every var has a fallback, so it boots standalone without `init.sh`. |
+| `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), host ssh-agent socket (ADR-0026), Claude persist dir, Docker socket. Every var has a fallback, so it boots standalone without `init.sh`. |
 | `.devcontainer/devcontainer.json` | `claude-code` + `docker-outside-of-docker` features; in-project `initializeCommand` → `init.sh`; `postCreateCommand` → `claude-persist-setup`. |
 | `.devcontainer/init.sh` | Host-side: generates `.env`, pre-creates the persist dir. Optional — the compose fallbacks cover a bare `docker compose up`. |
 | `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount; installs the baked workflow commands → `~/.claude/commands` and upstream skills → `~/.claude/skills`. |
@@ -262,7 +262,7 @@ The same [package-visibility](#inner-sandbox-images) note applies — pulling th
 `devcontainer` image anonymously needs it to be public, else `docker login ghcr.io`.
 
 The committed `docker-compose.yml` carries a fallback for every variable
-(`LOCAL_WORKSPACE_FOLDER:-${PWD}`, `SSH_DIR:-${HOME}/.ssh`, …), so a bare
+(`LOCAL_WORKSPACE_FOLDER:-${PWD}`, `SSH_AUTH_SOCK_HOST:-/run/host-services/ssh-auth.sock`, …), so a bare
 `docker compose up` from a project root works with no `.env` and no `init.sh` —
 `${PWD}` preserves the path-matched mount ([ADR-0011](docs/adr/0011-path-match-the-outer-mount.md)).
 `init.sh` (run by `up.sh` / `devcontainer up`) stays the path for VS Code and

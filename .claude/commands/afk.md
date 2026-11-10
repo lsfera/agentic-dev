@@ -31,7 +31,7 @@ afk … --dry-run` prints the resolved `AGENTIC_*` env without launching.
 
 - Bring the devcontainer up for this repo root (the dogfood "repo works on
   itself" case): `./up.sh .` on the host. The `github-cli` devcontainer feature
-  installs `gh`; the `~/.ssh` mount provides git push auth.
+  installs `gh`; the forwarded host ssh-agent (ADR-0026) provides git push auth.
 - `.sandcastle/.env` contains `CLAUDE_CODE_OAUTH_TOKEN` (mint on the host with
   `claude setup-token`). See `.sandcastle/.env.example`. This is injected into
   the inner sandboxes.

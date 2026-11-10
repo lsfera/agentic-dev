@@ -69,10 +69,12 @@
     ]
   },
   "enabledMcpjsonServers": [
-    "shadcn",
     "memory",
     "github",
-    "docker",
+    "docker"
+  ],
+  "disabledMcpjsonServers": [
+    "shadcn",
     "exa"
   ]
 }

@@ -44,14 +44,15 @@ services:
         target: ${LOCAL_WORKSPACE_FOLDER:-${PWD}}
         consistency: cached
 
-      # SSH keys — read-only for private git access.
-      # System-wide known_hosts are baked into the MS base image.
+      # SSH agent — git auth via the host's keychain-backed ssh-agent (ADR-0026).
+      # No private key file enters the container: Docker Desktop exposes the host
+      # agent (macOS: launchd agent fed by the Keychain via `UseKeychain` /
+      # `ssh-add --apple-use-keychain`) at /run/host-services/ssh-auth.sock inside
+      # its VM. Native Docker Engine on Linux: set SSH_AUTH_SOCK_HOST to the host's
+      # $SSH_AUTH_SOCK (init.sh does this automatically).
       - type: bind
-        source: ${SSH_DIR:-${HOME}/.ssh}
-        target: /home/vscode/.ssh
-        read_only: true
-        bind:
-          create_host_path: true
+        source: ${SSH_AUTH_SOCK_HOST:-/run/host-services/ssh-auth.sock}
+        target: /ssh-agent.sock
 
       # Claude Code config, MCP registrations, memory — shared across rebuilds.
       - type: bind
@@ -79,6 +80,7 @@ services:
     # host. AGENTIC_IN_CONTAINER is baked into the image via the Dockerfile ENV
     # directive, not forwarded here.
     environment:
+      SSH_AUTH_SOCK: /ssh-agent.sock
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
@@ -93,6 +95,8 @@ services:
       HEADROOM_API_KEY: ${HEADROOM_API_KEY:-}
 
     working_dir: ${WORKSPACE_FOLDER:-/workspace}
+    stdin_open: true # Equivalent to -i (keep stdin open)
+    tty: true
     # Fix docker-host.sock's group before idling. docker-outside-of-docker's own
     # /usr/local/share/docker-init.sh normally does this, but only as a CLI-
     # injected ENTRYPOINT wrapper (devcontainer up / VS Code Reopen in
@@ -110,8 +114,17 @@ services:
     # Best-effort: harmless no-op if the socket is absent (bare `docker compose
     # up`, no DooD feature) or already correctly grouped. sudo is passwordless
     # for vscode in the base devcontainer image.
+    # The agent socket arrives root-owned; open it to vscode the same way.
     command: >
-      sh -c "sudo chgrp docker /var/run/docker-host.sock 2>/dev/null; exec sleep infinity"
+      sh -c "sudo chgrp docker /var/run/docker-host.sock 2>/dev/null; sudo chmod a+rw /ssh-agent.sock 2>/dev/null; exec sleep infinity"
+
+    # GitHub's published SSH host keys (https://api.github.com/meta), so git push
+    # over SSH verifies the host without the host's ~/.ssh/known_hosts mount.
+    # Inline `configs.content` (Compose >= 2.23) keeps this file self-contained.
+    configs:
+      - source: ssh_known_hosts
+        target: /etc/ssh/ssh_known_hosts
+        mode: 0444
 
   # Headroom compression proxy (opt-in: `docker compose --profile headroom up`).
   # context-compressor.ts calls compress(), which defaults to POSTing to
@@ -157,3 +170,10 @@ networks:
   # containers (testcontainers Postgres, pgAdmin, …) can join it by name.
   default:
     name: devcontainer-network
+
+configs:
+  ssh_known_hosts:
+    content: |
+      github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+      github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+      github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
