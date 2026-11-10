@@ -18,6 +18,8 @@
  *                             own default — only needed when a custom image renames its
  *                             user to a different UID, e.g. the dotnet SDK base's 1654)
  *   SANDCASTLE_CONTAINER_GID  matching GID (default: 1000)
+ *   SANDCASTLE_SKILLS_DIR     repo-relative dir of Claude skills to install into the inner
+ *                             sandbox's ~/.claude/skills (ADR-0025)
  *   AGENTIC_CONCURRENCY   max parallel sandboxes (default: 1, serial)
  *   SMEE_URL              smee.io channel URL (enables event-driven mode)
  *   WEBHOOK_SECRET        shared HMAC secret for X-Hub-Signature-256 validation
@@ -690,6 +692,7 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
     network,
     containerUid,
     containerGid,
+    skillsDir: process.env.SANDCASTLE_SKILLS_DIR || undefined,
   });
 
   const reviewer = new ReviewerAdapter({

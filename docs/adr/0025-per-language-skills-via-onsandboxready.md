@@ -1,5 +1,9 @@
 # Inject per-language skills via onSandboxReady, not per-language Dockerfiles
 
+**Status:** Accepted and implemented (`SANDCASTLE_SKILLS_DIR` → `RunnerOptions.skillsDir` in `sandbox-runner.ts`; relative path, no `..`; applies to both tiers). Example: `examples/dotnet-project/skills/`.
+
+> **Note (ADR-0027/0028):** orchestrator sources moved to `.sandcastle/src/` (entrypoint `src/main.ts`, launched via `.sandcastle/run.sh`). Paths below are as originally written.
+
 ADR-0002/ADR-0024 settled how the inner sandbox gets a language's **toolchain**
 (a per-language `.sandcastle/Dockerfile.<lang>`, derived from a lean official
 upstream SDK image). Toolchain is not the same problem as **conventions**: a
@@ -73,8 +77,8 @@ packages per-recipe config today).
 - Skills become swappable at runtime (edit the directory, next run picks it
   up) without rebuilding the inner image — unlike the Dockerfile-bake
   alternative.
-- This ADR is a decision record only; no code changes are made by it.
-  Implementing `SANDCASTLE_SKILLS_DIR` in `main.ts`/`sandbox-runner.ts`, and
+- Originally a decision record only; it has since been implemented. Originally deferred:
+  implementing `SANDCASTLE_SKILLS_DIR` in `main.ts`/`sandbox-runner.ts`, and
   writing a first set of per-language skills to prove it out, is separate
   follow-up work, not part of this decision.
 

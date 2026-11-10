@@ -69,6 +69,17 @@ export SANDCASTLE_CONTAINER_GID=1654
 work the same way — they resolve `.sandcastle/src/main.ts` relative to that
 project's own workspace, so cwd is already correct.)
 
+## Custom skills (optional)
+
+Toolchain lives in the image; team *conventions* can be injected as Claude Code
+skills without rebuilding it (ADR-0025). Copy [`skills/`](skills/) into the target
+project (e.g. `.sandcastle/skills/`), then set `SANDCASTLE_SKILLS_DIR=.sandcastle/skills`
+in `.sandcastle/orchestrator.env`. Each issue's sandbox gets the folder copied into
+its worktree and installed into `~/.claude/skills` before the agent starts. Edit a
+`SKILL.md` and the next run picks it up — no image rebuild. The path must be relative
+to the repo root and contain no `..`. Skills in the outer image (ADR-0017) never reach
+the inner sandboxes.
+
 ## Adapting this to another language
 
 The pattern generalizes: swap `Dockerfile.dotnet`'s base image

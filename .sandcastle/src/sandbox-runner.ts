@@ -125,6 +125,11 @@ export interface RunnerOptions {
    *  A no-op in the devcontainer, where the user is already 1000. */
   readonly containerUid?: number;
   readonly containerGid?: number;
+  /** Directory of Claude Code skills (SKILL.md folders) to install into the
+   *  inner sandbox's ~/.claude/skills before the agent starts (ADR-0025;
+   *  env SANDCASTLE_SKILLS_DIR). Must be relative to `cwd` (the repo root):
+   *  sandcastle's copyToWorktree only copies host-relative paths. */
+  readonly skillsDir?: string;
 }
 
 /** A command to run inside the sandbox once it is ready (sandcastle's
@@ -167,12 +172,45 @@ export interface IssueInput {
   readonly body: string;
 }
 
+/** Pure: the copyToWorktree entry + onSandboxReady step that install a skills
+ *  directory into ~/.claude/skills (ADR-0025). Reuses the same hook pair as the
+ *  local tier's opencode.json relocation. */
+function skillsInstall(dir: string): { copy: string; hook: SandboxReadyHook } {
+  if (dir.startsWith("/") || dir.split("/").includes("..")) {
+    throw new Error(
+      `SANDCASTLE_SKILLS_DIR must be a path relative to the repo root without "..": ${dir}`,
+    );
+  }
+  const quoted = `'${dir.replace(/'/g, `'\\''`)}'`;
+  return {
+    copy: dir,
+    hook: {
+      command: `mkdir -p "$HOME/.claude/skills" && cp -r ${quoted}/. "$HOME/.claude/skills/"`,
+    },
+  };
+}
+
 /** Pure function: resolve RunnerOptions + IssueInput to the per-tier agent
  *  config, including the prompt template path and substitution args.
  *  `memoryContext` (ADR-0022) is the caller-retrieved {{MEMORY_CONTEXT}}
  *  rendering — this function stays free of GitHub I/O, matching the existing
  *  pure-reducer/impure-adapter split (memory-store.ts owns the retrieval). */
 export function buildAgentInput(
+  opts: RunnerOptions,
+  issue: IssueInput,
+  memoryContext?: string,
+): AgentInput {
+  const base = buildTierInput(opts, issue, memoryContext);
+  if (!opts.skillsDir) return base;
+  const { copy, hook } = skillsInstall(opts.skillsDir);
+  return {
+    ...base,
+    copyToWorktree: [...(base.copyToWorktree ?? []), copy],
+    onSandboxReady: [...(base.onSandboxReady ?? []), hook],
+  };
+}
+
+function buildTierInput(
   opts: RunnerOptions,
   issue: IssueInput,
   memoryContext?: string,

@@ -196,3 +196,37 @@ test("isTransientAgentError: false for an unrelated/logic error", () => {
 test("isTransientAgentError: false for a non-Error thrown value", () => {
   assert.equal(isTransientAgentError("just a string"), false);
 });
+
+// --- SANDCASTLE_SKILLS_DIR (ADR-0025) ---------------------------------------
+
+test("no skillsDir → claude tier adds no copy or hook", () => {
+  const input = buildAgentInput({}, STUB_ISSUE);
+  assert.equal(input.copyToWorktree, undefined);
+  assert.equal(input.onSandboxReady, undefined);
+});
+
+test("skillsDir is copied to the worktree and installed into ~/.claude/skills", () => {
+  const input = buildAgentInput({ skillsDir: "skills/dotnet" }, STUB_ISSUE);
+  assert.deepEqual(input.copyToWorktree, ["skills/dotnet"]);
+  const cmds = input.onSandboxReady!.map((h) => h.command).join("\n");
+  assert.match(cmds, /mkdir -p "\$HOME\/\.claude\/skills"/);
+  assert.match(cmds, /cp -r 'skills\/dotnet'\/\. "\$HOME\/\.claude\/skills\/"/);
+});
+
+test("skillsDir composes with the local tier's opencode.json hook", () => {
+  const input = buildAgentInput({ tier: "local", skillsDir: "skills/x" }, STUB_ISSUE);
+  assert.deepEqual(input.copyToWorktree, ["opencode.json", "skills/x"]);
+  const cmds = input.onSandboxReady!.map((h) => h.command).join("\n");
+  assert.match(cmds, /opencode\.json/);
+  assert.match(cmds, /\.claude\/skills/);
+});
+
+test("skillsDir with a quote is shell-escaped", () => {
+  const input = buildAgentInput({ skillsDir: "it's" }, STUB_ISSUE);
+  assert.match(input.onSandboxReady![0].command, /'it'\\''s'/);
+});
+
+test("absolute or parent-relative skillsDir is rejected", () => {
+  assert.throws(() => buildAgentInput({ skillsDir: "/abs/skills" }, STUB_ISSUE), /relative/);
+  assert.throws(() => buildAgentInput({ skillsDir: "../skills" }, STUB_ISSUE), /relative/);
+});
