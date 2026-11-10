@@ -1,5 +1,9 @@
 # Sandcastle is not a language constraint — no engine change for multi-language support
 
+**Status:** Accepted.
+
+> **Note (ADR-0027/0028):** orchestrator sources moved to `.sandcastle/src/` (entrypoint `src/main.ts`, launched via `.sandcastle/run.sh`). Paths below are as originally written.
+
 agentic-dev's `/afk`/`/hitl` orchestration works well for TypeScript/JS target
 projects today. Extending it to other target languages (dotnet, rust) raised
 the question of whether the underlying agent-sandbox engine — `@ai-hero/sandcastle`,

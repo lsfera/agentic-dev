@@ -1,5 +1,7 @@
 # Bake the workflow commands and upstream skills into the outer image
 
+**Status:** Accepted.
+
 ADR-0016 bakes the orchestrator *source* into the outer image, so an adopter
 doesn't vendor `.sandcastle/*.ts`. But the **workflow** the orchestrator drives —
 the `/grill-me-with-docs → /to-prd → /to-issues → /afk`/`/hitl` slash commands, and

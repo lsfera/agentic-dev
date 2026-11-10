@@ -1,5 +1,7 @@
 # Give inner sandboxes an MTU-corrected network
 
+**Status:** Accepted.
+
 Both agent tiers produced empty "Agent started → Agent stopped" turns (0 commits) when driven through the orchestrator (#48), while the same agents worked standalone. After ruling out CLAUDE.md, auth/token, stdin delivery, OOM, the SDK entrypoint, the binary, env vars, and usage quota (the same token returns a full turn on the host and inside the `agentic-dev` devcontainer), the cause was localized to the **inner sandbox container's network**.
 
 ## Root cause (validated 2026-06-25)

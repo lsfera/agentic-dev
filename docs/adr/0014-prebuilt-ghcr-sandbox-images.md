@@ -1,5 +1,7 @@
 # Publish prebuilt inner sandbox images to GHCR
 
+**Status:** Accepted.
+
 Adopting the orchestrator on a new project required building the inner sandbox
 images by hand — `docker build -f .sandcastle/Dockerfile -t sandcastle:local …`
 and the same for `Dockerfile.opencode`. That is per-machine friction (every host

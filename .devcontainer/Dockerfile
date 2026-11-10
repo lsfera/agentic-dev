@@ -27,7 +27,7 @@ RUN chmod +x /usr/local/bin/claude-persist-setup /usr/local/bin/afk \
 
 # Optionally bake the orchestrator SOURCE (ADR-0016) + workflow slash commands +
 # upstream engineering-discipline skills (ADR-0017) into the image so adopters can run
-# without vendoring .sandcastle/*.ts or .claude/commands/*.md. Gated by build-arg, so the
+# without vendoring .sandcastle/src/*.ts or .claude/commands/*.md. Gated by build-arg, so the
 # compose/runtime build (the dogfood) stays lean and keeps using the workspace copy.
 # We clone the COMMITTED code (not COPY the build context) so gitignored secrets
 # (.sandcastle/.env, orchestrator.env) can never reach this public image — and so files

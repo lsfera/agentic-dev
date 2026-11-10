@@ -1,5 +1,7 @@
 # A single subscription seat shapes Claude auth injection and concurrency
 
+**Status:** Accepted.
+
 Claude is driven by a Max/Pro subscription (OAuth), not an API key. Inner agentic sandboxes therefore reuse the OAuth credentials agentic.dev already persists at `~/.claude` (via claude-persist). This single seat, not Docker, is the binding constraint on parallelism.
 
 ## Decisions
@@ -11,7 +13,7 @@ Claude is driven by a Max/Pro subscription (OAuth), not an API key. Inner agenti
 
 An autonomous `claudeCode` agent ran inside the inner sandbox using only `CLAUDE_CODE_OAUTH_TOKEN` (from `.sandcastle/.env`, minted via `claude setup-token`) — no `ANTHROPIC_API_KEY` — and committed to `spike/beat-2`, visible on the host. Subscription auth in the inner sandbox works.
 
-**Finding — needs a completion signal.** With `maxIterations: 3` and no `completionSignal`, the agent ran all 3 iterations and appended its line twice (two duplicate commits). The real orchestrator must pass a `completionSignal` (and/or tighter `maxIterations`) so agents stop when done rather than looping and duplicating work. Relevant to the `/afk` loop (ADR-0007/0008).
+**Finding — needs a completion signal.** With `maxIterations: 3` and no `completionSignal`, the agent ran all 3 iterations and appended its line twice (two duplicate commits). The real orchestrator must pass a `completionSignal` (and/or tighter `maxIterations`) so agents stop when done rather than looping and duplicating work. Relevant to the `/afk` loop (ADR-0020/0008).
 
 ## The agent backend is a pluggable tier — local Ollama validated (2026-06-19)
 

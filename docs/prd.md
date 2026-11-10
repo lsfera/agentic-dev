@@ -40,7 +40,7 @@ Replace the host-sub-agent engine of `/afk` with an **orchestrator** (the sandca
 
 ## Implementation Decisions
 
-- **Engine swap, not workflow change (ADR-0005, ADR-0006).** `/grill-me-with-docs` → `/to-prd` → `/to-issues` and GitHub-issues-as-durable-state are unchanged. `/afk` becomes a thin wrapper that `/exec`s the orchestrator; the orchestrator's `main.ts` is the new engine.
+- **Engine swap, not workflow change (ADR-0005).** `/grill-me-with-docs` → `/to-prd` → `/to-issues` and GitHub-issues-as-durable-state are unchanged. `/afk` becomes a thin wrapper that `/exec`s the orchestrator; the orchestrator (`.sandcastle/src/main.ts`) is the new engine.
 - **Run from the path-matched mount (ADR-0011, implemented).** The orchestrator's working directory is `${LOCAL_WORKSPACE_FOLDER}` (the host-path mirror mount), not `/workspaces/<folder>`, so sandcastle's worktrees carry host-resolvable paths under docker-outside-of-docker.
 - **Git-isolated execution (ADR-0001).** Sandcastle's `branch` strategy: each agentic sandbox gets its own checkout and commits to a named branch (e.g. `agent/issue-<N>`), pushed back. Confirmed that sandcastle bind-mounts the worktree, hence the path-match requirement.
 - **Pure orchestration core.** A single pure reducer holds all decision logic. Shape (from the design):
@@ -54,14 +54,14 @@ Replace the host-sub-agent engine of `/afk` with an **orchestrator** (the sandca
   The reducer never performs I/O. It computes the ready-set from issues + merged PRs, respects the concurrency policy, gates merge by mode, and emits `Stop` when nothing is ready and no PR is in flight.
 - **Thin adapters driven by actions.** `IssueSource` (GitHub via `gh`: list/label/comment, PR create/merge), `SandboxRunner` (wraps sandcastle `run()`), `EventBridge` (smee → reducer events). Adapters carry no decision logic.
 - **Concurrency is a per-run knob, default serial (ADR-0003).** The reducer emits at most `policy.concurrency` concurrent `StartSandbox` actions; default 1.
-- **Auto-merge vs HITL (ADR-0007, ADR-0009).** `/afk` emits `EnableAutoMerge(pr)` (GitHub-native `gh pr merge --auto`), gating entirely on required CI checks. `/hitl` emits `WaitForHuman(pr)` instead. Both advance via the same `PrMerged` event; the only difference is who merges. A closed-unmerged PR leaves dependents blocked.
+- **Auto-merge vs HITL (ADR-0020).** `/afk` emits `EnableAutoMerge(pr)` (GitHub-native `gh pr merge --auto`), gating entirely on required CI checks. `/hitl` emits `WaitForHuman(pr)` instead. Both advance via the same `PrMerged` event; the only difference is who merges. A closed-unmerged PR leaves dependents blocked.
 - **Event-driven with a reconciliation backstop (ADR-0008).** The orchestrator is a persistent listener fed by a smee channel relaying GitHub `pull_request` events. On startup and periodically it re-derives the ready-set from live GitHub state so missed deliveries cannot stall it. Webhook payloads are HMAC-validated; merge events are de-duplicated by PR number / merge SHA so a sandbox never starts twice.
 - **Agent backend is a pluggable per-run tier (ADR-0003).** Default tier is Claude via `claudeCode`, authenticated by `CLAUDE_CODE_OAUTH_TOKEN` injected from `.sandcastle/.env` (no API key). A local tier uses `opencode` pointed at the host Ollama server (`host.docker.internal:11434`, OpenAI-compatible) via an `opencode.json` provider block copied into the worktree; the inner image must contain the chosen CLI.
 - **Inner image (ADR-0002).** Lean sandcastle default (Node + git + gh + the agent CLI) for JS/TS; toolchain-heavy projects derive their own `.sandcastle/Dockerfile`. The OpenCode local-tier image is a separate variant.
 - **Git push auth (ADR-0004).** Agentic sandboxes push using the host SSH key mounted read-only; safe under the default-serial policy (one key copy live at a time).
 - **Completion signal required.** Each `run()` passes a `completionSignal` (and bounded `maxIterations`) so an agent stops when done instead of looping and producing duplicate commits (observed in the spike).
 - **Scope guardrails preserved.** The per-issue agent prompt keeps the existing guardrails: only files the issue requires, no pushing to main, no closing other issues, no new dependencies; finish by committing to the branch, commenting the issue, opening the PR.
-- **Sandbox lifecycle (ADR-0010).** Each run closes its sandbox in a `finally`; inner sandboxes are labeled and the orchestrator runs a label-scoped teardown sweep on startup/shutdown to remove orphans.
+- **Sandbox lifecycle (ADR-0008).** Each run closes its sandbox in a `finally`; inner sandboxes are labeled and the orchestrator runs a label-scoped teardown sweep on startup/shutdown to remove orphans.
 
 ## Testing Decisions
 

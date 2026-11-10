@@ -1,5 +1,7 @@
 # Agentic sandboxes exchange code via git, not bind mounts
 
+**Status:** Accepted. The "no bind mount" consequence was withdrawn by ADR-0011.
+
 The orchestrator (sandcastle) runs inside the outer devcontainer, which reaches Docker through docker-outside-of-docker (the host socket is bind-mounted in). Bind-mounting a host worktree into an inner agentic sandbox would be resolved by the *host* daemon, which has no `/workspaces/...` path — the classic DooD path trap — and would also serialize parallel per-issue agents fighting over one mount.
 
 We therefore use sandcastle's `branch` (isolated) strategy: each agentic sandbox gets its own checkout and commits to a named branch pushed back to the remote. This matches agentic.dev's existing philosophy that the container is disposable and durable state lives in git/issues, not local files.

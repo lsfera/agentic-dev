@@ -1,5 +1,7 @@
 # Publish the prebuilt outer orchestrator image to GHCR
 
+**Status:** Accepted.
+
 ADR-0014 published the *inner* sandbox images so adopters skip building those.
 The *outer* image — the devcontainer the orchestrator itself runs in — was still
 built locally on every adopter's machine by `devcontainer up` (base image + the

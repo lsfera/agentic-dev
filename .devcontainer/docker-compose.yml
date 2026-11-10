@@ -13,7 +13,7 @@ services:
     container_name: ${DEVCONTAINER_NAME:-devcontainer}
     # Dogfooding from the published image (ADR-0015/0016): the dogfood runs from the
     # prebuilt outer image, not a local build. The workspace still carries
-    # .sandcastle/*.ts, so the orchestrator runs from the workspace source — the
+    # .sandcastle/src/*.ts, so the orchestrator runs from the workspace source — the
     # baked /opt copy is only the adopter fallback. `:latest` tracks the newest
     # publish; pin a release for reproducibility (resolve with
     # `curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].tag_name | ltrimstr("v")'`).

@@ -1,5 +1,7 @@
 # Bake the orchestrator into the outer image
 
+**Status:** Accepted.
+
 ADR-0015 publishes the outer devcontainer image, but it only carried the *runtime*
 (node, docker, gh, claude + the `afk`/`hitl` launchers). The orchestrator itself —
 `.sandcastle/*.ts` and its deps — still had to be **vendored into every adopting

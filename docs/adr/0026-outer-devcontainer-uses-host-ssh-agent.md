@@ -1,5 +1,7 @@
 # Outer devcontainer authenticates git via the host's ssh-agent, not a ~/.ssh mount
 
+**Status:** Accepted. Supersedes the `~/.ssh` mount premise noted in ADR-0004.
+
 The outer devcontainer used to bind-mount the host's `~/.ssh` read-only. That put
 the raw private key inside the container and dragged in the host's `ssh/config` —
 which on macOS typically carries `UseKeychain yes`, a macOS-only option that Linux

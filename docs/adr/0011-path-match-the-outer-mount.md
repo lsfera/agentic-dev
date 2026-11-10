@@ -1,5 +1,9 @@
 # Fix the DooD path trap by path-matching the outer mount
 
+**Status:** Accepted.
+
+> **Note (ADR-0027/0028):** orchestrator sources moved to `.sandcastle/src/` (entrypoint `src/main.ts`, launched via `.sandcastle/run.sh`). Paths below are as originally written.
+
 ADR-0001's premise failed (sandcastle bind-mounts the worktree; under docker-outside-of-docker the host daemon can't resolve an outer-container path). The fix: make the orchestrator's path string for the project **equal the real host path**, so the worktree under `<project>/.sandcastle/worktrees/<branch>` resolves on the host daemon.
 
 ## Validated empirically (Beat 1b, 2026-06-19)
@@ -8,11 +12,11 @@ A throwaway outer container with the project bind-mounted at its real host path 
 
 ## Decision — non-invasive variant
 
-Do **not** replace `/workspaces/<folder>` (that would churn `devcontainer.json` `workspaceFolder`, `up.sh`, VS Code attach, and docs). Instead **add a parallel bind mount** of the same host dir at its absolute host path, keep `/workspaces/<folder>` for humans/editor, and **run the orchestrator (sandcastle) from the host-path mount** so its worktrees are path-matched. Since `/afk` is `/exec npx tsx .sandcastle/main.ts` (ADR-0006), that exec simply `cd`s to the host-path mount.
+Do **not** replace `/workspaces/<folder>` (that would churn `devcontainer.json` `workspaceFolder`, `up.sh`, VS Code attach, and docs). Instead **add a parallel bind mount** of the same host dir at its absolute host path, keep `/workspaces/<folder>` for humans/editor, and **run the orchestrator (sandcastle) from the host-path mount** so its worktrees are path-matched. Since `/afk` is `/exec npx tsx .sandcastle/main.ts` (ADR-0005), that exec simply `cd`s to the host-path mount.
 
 ## Implemented & validated in the real config (2026-06-19)
 
-Done as a single additive bind mount in `.devcontainer/docker-compose.yml` (target == source == `${LOCAL_WORKSPACE_FOLDER}`), alongside the existing `/workspaces/<basename>` mount. No change to `init.sh` (it already exports `LOCAL_WORKSPACE_FOLDER`), `devcontainer.json`, or `up.sh`. After `./down.sh` + `./up.sh`, Beat 1 ran green **in the real `agentic-sandbox`** (as `vscode`, socket group via the DooD feature, no chmod): worktree resolved to the host path, commit landed on `spike/beat-1`. Still TODO in the orchestrator: make `/afk`'s `/exec` run from `${LOCAL_WORKSPACE_FOLDER}` (ADR-0006) so sandcastle's cwd is the path-matched mount.
+Done as a single additive bind mount in `.devcontainer/docker-compose.yml` (target == source == `${LOCAL_WORKSPACE_FOLDER}`), alongside the existing `/workspaces/<basename>` mount. No change to `init.sh` (it already exports `LOCAL_WORKSPACE_FOLDER`), `devcontainer.json`, or `up.sh`. After `./down.sh` + `./up.sh`, Beat 1 ran green **in the real `agentic-sandbox`** (as `vscode`, socket group via the DooD feature, no chmod): worktree resolved to the host path, commit landed on `spike/beat-1`. Still TODO in the orchestrator: make `/afk`'s `/exec` run from `${LOCAL_WORKSPACE_FOLDER}` (ADR-0005) so sandcastle's cwd is the path-matched mount.
 
 ## Update — simpler under the self-contained model (ADR-0012, 2026-06-24)
 

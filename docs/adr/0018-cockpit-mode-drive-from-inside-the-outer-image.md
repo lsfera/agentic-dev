@@ -1,5 +1,7 @@
 # Cockpit mode — drive the workflow from inside the outer image
 
+**Status:** Accepted.
+
 ADR-0017 baked the workflow slash commands and upstream skills into the published
 image so an adopter doesn't need to vendor `.claude/commands/`. The next step is
 letting **Claude itself run inside the container** — no host Claude, no docker MCP
@@ -28,7 +30,7 @@ names, hostnames, or socket paths.
 
 ### Context-aware `/exec` (one corpus, no forks)
 
-`/exec` is the single shell-dispatch boundary used by all slash commands (ADR-0006).
+`/exec` is the single shell-dispatch boundary used by all slash commands (ADR-0005).
 In cockpit mode it checks `AGENTIC_IN_CONTAINER`:
 - **Set:** run the command in the local Bash shell.
 - **Absent:** route to `mcp__docker__run_command` (host mode, unchanged).
@@ -78,7 +80,7 @@ directory without the human needing to know the workspace path. No new host scri
 
 ## Relation to prior ADRs
 
-- **ADR-0006:** `/exec` remains the single shell boundary; cockpit mode adds a
+- **ADR-0005:** `/exec` remains the single shell boundary; cockpit mode adds a
   second code path (local Bash), but the rule ("only use `/exec`") is unchanged.
 - **ADR-0011:** the path-matched host mount is still used by the orchestrator so
   sandcastle's worktrees resolve correctly under docker-outside-of-docker. Cockpit

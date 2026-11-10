@@ -1,5 +1,7 @@
 # Self-contained per-project devcontainer
 
+**Status:** Accepted. Supersedes the shared-`.devcontainer` premise of earlier ADRs.
+
 Supersedes the "one shared `.devcontainer` serves every project; each project is a subfolder" premise that earlier ADRs and `up.sh` assumed.
 
 ## Context

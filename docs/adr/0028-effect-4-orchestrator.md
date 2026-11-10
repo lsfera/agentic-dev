@@ -1,5 +1,7 @@
 # The orchestrator is built on Effect 4
 
+**Status:** Accepted. Supersedes the async/await style of ADR-0005/0019.
+
 Supersedes the plain `async/await` style of the original orchestrator (ADR-0005/0019); behaviour is unchanged.
 
 - **Dependency:** `effect@^4`. `@ai-hero/sandcastle` bundles its own `effect@3` internally; the two coexist because our code only talks to sandcastle through its Promise API (`createSandbox`, `run`, `sandbox.run`) — no Effect values cross that boundary.

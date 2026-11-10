@@ -1,5 +1,7 @@
 # Cross-run agent memory
 
+**Status:** Accepted.
+
 A hand-rolled, GitHub-issue-backed memory store gives each `/afk` run access to facts learned by *previous* runs against the same repo: project conventions, gotchas an agent hit, and outcome history for issues that needed more than one attempt. Storage is a single pinned issue per repo, auto-created on first write, labelled `agent:memory`. Retrieval is category-filtered and injected into the implementing agent's prompt via `{{MEMORY_CONTEXT}}`.
 
 ## Motivation

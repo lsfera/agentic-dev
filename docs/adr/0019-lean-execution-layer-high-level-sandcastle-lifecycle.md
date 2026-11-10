@@ -1,5 +1,7 @@
 # Lean execution layer — high-level sandcastle lifecycle
 
+**Status:** Accepted. The Promise-based style is superseded by ADR-0028 (behaviour unchanged).
+
 The original `sandbox-runner.ts` called `run()` directly and hand-rolled its
 own lifecycle: building the full options object inline, embedding prompt text
 in TypeScript string arrays, and relying on `run()`'s internal teardown. This
@@ -97,7 +99,7 @@ docker options — the bug returns immediately.
 
 ## Relations
 
-- ADR-0006: `/afk` still wraps sandcastle via exec — `createSandbox` execs under
+- ADR-0005: `/afk` still wraps sandcastle via exec — `createSandbox` execs under
   the hood just as `run()` did.
 - ADR-0013: MTU network creation stays in `ensureSandboxNetwork`; `docker(network)`
   only attaches. The split is recorded here.

@@ -1,6 +1,8 @@
 # `.sandcastle/` is organised into `src/`, `docker/` and `prompts/`
 
-Refines the `.sandcastle/` location decision in ADR-0010 (location unchanged: still per project).
+**Status:** Accepted.
+
+Location: `.sandcastle/` lives **per mounted project**, inside the folder bound at `/workspaces/<folder>`, consistent with the per-project Dockerfile (ADR-0002). The orchestration logic is a generic shared core and only configuration is per-project (ADR-0008). This ADR absorbs the former ADR-0010's location decision (removed) and defines the internal layout.
 
 `.sandcastle/` had grown to 34 flat files mixing TypeScript, tests, Dockerfiles, prompt templates and launch scripts. It is now:
 

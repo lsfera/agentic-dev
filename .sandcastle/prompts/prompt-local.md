@@ -7,7 +7,7 @@ MEMORY FROM PREVIOUS RUNS:
 {{MEMORY_CONTEXT}}
 
 The code lives in the `.sandcastle/` directory (TypeScript). Steps:
-1. Read the relevant `.sandcastle/*.ts` file(s) with your read tool.
+1. Read the relevant `.sandcastle/src/*.ts` file(s) with your read tool.
 2. Make the change with your edit tool.
 3. Run the tests: `cd .sandcastle && npm test` — fix until they pass.
 4. Commit: `cd .sandcastle && cd .. && git add -A && git commit -m "<message> (#{{ISSUE_NUMBER}})"`

@@ -1,5 +1,7 @@
 # Headroom context-compression proxy
 
+**Status:** Accepted.
+
 An opt-in, off-by-default integration with `headroom-ai` that shrinks the token footprint of agent sandbox runs two ways: a one-shot compression of the initial prompt (`context-compressor.ts`, landed quietly in PR #85), and — new here — routing the inner sandbox's *entire* live Claude Code session through a local `headroom proxy` container so every turn, not just the first, is compressed. Both are gated by `HEADROOM_MODE` (`off` by default) and require the adopter to run their own proxy; nothing about this is on by default or required.
 
 ## Motivation

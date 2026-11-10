@@ -1,5 +1,9 @@
 # Inner sandboxes push via a read-only SSH key mount
 
+**Status:** Accepted (design); currently the orchestrator pushes from the outer container, see the status section below and ADR-0026.
+
+> **Note (ADR-0027/0028):** orchestrator sources moved to `.sandcastle/src/` (entrypoint `src/main.ts`, launched via `.sandcastle/run.sh`). Paths below are as originally written.
+
 Inner agentic sandboxes authenticate their git push by reusing the host SSH key, mounted read-only at `$HOME/.ssh` per sandbox — mirroring how the outer devcontainer already mounts it. We chose this over a scoped HTTPS token for parity with agentic.dev's existing SSH-based setup.
 
 The usual objection — private key material spread across disposable, parallel sandboxes — is mitigated by the default-serial concurrency policy (ADR-0003): only one inner sandbox is live at a time, so at most one key copy is in flight.

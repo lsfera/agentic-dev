@@ -19,8 +19,9 @@ curl -fsSL -o .devcontainer/docker-compose.yml \
 #       https://raw.githubusercontent.com/lsfera/agentic-dev/main/.devcontainer/docker-compose.yml
 
 docker compose -f .devcontainer/docker-compose.yml up -d   # standalone — no .env, no init.sh
-#  …drive the workflow with Claude:
-#  /grill-me-with-docs → /to-prd → /to-issues → /afk | /hitl …
+#  …drive the workflow with Claude (cockpit, no host setup):
+docker compose -f .devcontainer/docker-compose.yml exec -it devcontainer cockpit
+#  then: /grill-me-with-docs → /to-prd → /to-issues → /afk | /hitl …
 docker compose -f .devcontainer/docker-compose.yml down
 ```
 
@@ -52,9 +53,35 @@ Don't want to build the images locally? Pull the prebuilt ones from GHCR instead
                   └── GitHub issues = durable state ────┘
 ```
 
-- **Claude runs on the host** and shells into the container with `/exec` → `mcp__docker__run_command(service="devcontainer")`, a thin `docker compose exec` wrapper. Nothing AI runs inside the container.
+There are two ways to drive the workflow; both use the same slash commands, and `/exec` detects the context automatically (`AGENTIC_IN_CONTAINER`):
+
+| Mode | Where Claude runs | How to start |
+|------|-------------------|--------------|
+| **Host-driven** (default for the dogfood) | On the host; reaches the container via `/exec` → `mcp__docker__run_command(service="devcontainer")`, a thin `docker compose exec` wrapper | `./up.sh .`, then open a host Claude session |
+| **Cockpit** (needs no host Claude or docker MCP) | Inside the devcontainer | `docker compose -f .devcontainer/docker-compose.yml exec -it devcontainer cockpit` — see [Cockpit mode](#cockpit-mode) |
+
 - **GitHub issues are the durable state.** The container is disposable; progress lives in issues, not in local files.
-- **The image bakes the workflow in.** The published devcontainer installs the slash commands → `~/.claude/commands` and engineering disciplines → `~/.claude/skills` ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)). Today Claude still drives from the **host** (above), which needs the docker MCP wiring (see [Sandbox wiring](#sandbox-wiring)); baking the workflow in is groundwork toward driving it entirely from the in-container Claude.
+- **The image bakes the workflow in.** The published devcontainer installs the slash commands → `~/.claude/commands` and engineering disciplines → `~/.claude/skills` ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)). This is what cockpit mode relies on; host-driven mode uses the workspace `.claude/commands` and needs the docker MCP wiring (see [Sandbox wiring](#sandbox-wiring)).
+- **Terminology** (see [CONTEXT.md](CONTEXT.md)): the *outer devcontainer* is where you and the orchestrator work; an *agentic sandbox* is a disposable inner container per unit of work. Below, "sandbox" without qualification means the outer devcontainer when talking about `/exec`/`up.sh`, and the inner container under [Inner sandbox images](#inner-sandbox-images).
+
+## Cockpit mode
+
+Drive everything from inside the container with only the compose file and exported credentials:
+
+```bash
+docker compose -f .devcontainer/docker-compose.yml exec -it devcontainer cockpit
+# → Claude Code inside the container, at the workspace root (ADR-0018)
+```
+
+Inside cockpit, `/afk` and `/hitl` **detach automatically**: the orchestrator starts as a background job, prints its PID and log path, and returns the prompt.
+
+```bash
+tail -f .sandcastle/logs/afk-*.log          # follow the live log (Ctrl-C stops tailing only)
+cat .sandcastle/afk.pid                     # PID
+kill $(cat .sandcastle/afk.pid) && rm .sandcastle/afk.pid   # stop it
+```
+
+The published image bakes a global `~/.claude/settings.json` that pre-allows `gh`, `git`, `afk` and `hitl`; a workspace `.claude/settings.local.json` overrides it. Host-driven `/afk`/`/hitl` (via `/exec`) are unaffected and run in the foreground.
 
 ## Local development & dogfood
 
@@ -99,11 +126,11 @@ Attaching VS Code to an already-running container is fine and does not disturb t
 
 End to end, from a clean checkout to merged work:
 
-1. **One-time setup**
+1. **One-time setup** *(host-driven mode only — cockpit mode needs none of this)*
    - Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.json` (see [Permissions](#permissions)).
    - Make sure the docker MCP server targets your project's compose project (see [Sandbox wiring](#sandbox-wiring)).
 2. **Boot the sandbox** in your project: `docker compose -f .devcontainer/docker-compose.yml up -d`. *(Developing this repo? Use `./up.sh <folder>` — see [Local development & dogfood](#local-development--dogfood).)*
-3. **`/grill-me-with-docs`** — Claude interviews you and reads any docs you point at, producing `docs/grill-output.md`.
+3. **`/grill-me-with-docs`** — Claude interviews you and reads any docs you point at, producing `docs/grill-output.md` (generated in *your* project; this repo only commits its own `docs/prd.md`).
 4. **`/to-prd`** — turns the interview into a structured `docs/prd.md`.
 5. **`/to-issues`** — breaks the PRD into **vertical slices** as GitHub issues. Unblocked issues get the `ready-for-agent` label.
 6. **Implement** — pick one:
@@ -129,7 +156,7 @@ Supporting commands:
 | Command | Purpose |
 |---------|---------|
 | `/exec <cmd>` | Run a shell command in the Docker sandbox (`mcp__docker__run_command(service="devcontainer")`). The **only** place that MCP tool is named — every other command routes through it. |
-| `/tdd` | Red → green → refactor loop for each acceptance criterion. Used by the implementation agents. |
+| `/tdd` | Red → green → refactor loop for each acceptance criterion. Used by the implementation agents (also baked as a model-invoked `tdd` skill, ADR-0017). |
 
 ### Issue lifecycle
 
@@ -138,6 +165,26 @@ Supporting commands:
 - After an issue closes, its dependents are re-checked; if all their blockers are now closed, they get `ready-for-agent`.
 - **GitHub is the durable state** — nothing is stored in `/tmp` or local files that would be lost on container restart.
 
+| Label | Meaning |
+|-------|---------|
+| `ready-for-agent` | Unblocked; waiting to be claimed by the orchestrator |
+| `agent:in-progress` | A sandbox is actively implementing this issue |
+| `agent:in-review` | The AI reviewer is running on the open PR (`/afk` only) |
+| `agent:memory` | The pinned issue backing cross-run agent memory |
+
+`agent:in-progress` / `agent:in-review` mirror the orchestrator's in-flight state and are read once at startup to recover work left mid-flight by a crashed run ([ADR-0021](docs/adr/0021-durable-agent-lifecycle-labels.md)); the orchestrator creates them idempotently.
+
+**Retries.** If a sandbox throws or produces no commits, the issue is re-labelled `ready-for-agent` and retried up to `Policy.maxRetries` times per run (default 2); after that it is left unlabelled with an explanatory comment. Attempt counts live in the orchestrator's in-run state and reset on restart, so a persistently failing issue gets another `maxRetries` attempts per fresh run.
+
+### Orchestrator behaviour (`/afk`)
+
+- **Review gate** ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)): after the implementing sandbox opens a PR, a reviewer sandbox checks the diff against the issue's acceptance criteria. Only a `pass` verdict proceeds; `changes-requested` parks the PR for a human.
+- **Auto-merge** ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)): on `pass`, GitHub-native auto-merge merges the PR once CI is green. CI must be meaningful and required — configure branch protection. `/hitl` keeps a human merge gate instead ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)).
+- **Event-driven** ([ADR-0008](docs/adr/0008-event-driven-orchestration-via-smee.md)): a persistent listener reacts to `PR merged` webhooks relayed via smee.io, and periodically re-derives the ready-set from live GitHub state as a backstop.
+- **Cross-run memory** ([ADR-0022](docs/adr/0022-cross-run-agent-memory.md)): facts learned by earlier runs are stored in a pinned `agent:memory` issue and injected into implementer prompts.
+- **Per-language skills** ([ADR-0025](docs/adr/0025-per-language-skills-via-onsandboxready.md)): toolchain comes from a per-language inner image (`.sandcastle/docker/Dockerfile.dotnet`), and team conventions are injected as Claude skills by pointing `SANDCASTLE_SKILLS_DIR` at a repo-relative directory of `SKILL.md` folders — copied into each inner sandbox's `~/.claude/skills`, no image rebuild (see [`examples/dotnet-project`](examples/dotnet-project/)).
+- **Implementation** is built on Effect 4 ([ADR-0028](docs/adr/0028-effect-4-orchestrator.md)); sources are in `.sandcastle/src/`, with prompts in `.sandcastle/prompts/` and inner-image Dockerfiles in `.sandcastle/docker/` ([ADR-0027](docs/adr/0027-sandcastle-directory-layout.md)).
+
 ## Devcontainer internals
 
 | File | Role |
@@ -145,11 +192,14 @@ Supporting commands:
 | `up.sh` | Thin `devcontainer up` wrapper for a self-contained project (`./up.sh .`). |
 | `down.sh` | Tear down sandboxes from this repo, scoped by label (`./down.sh [folder]`). |
 | `code.sh` | Optional: attach VS Code to a running sandbox at its workspace folder. |
-| `.devcontainer/init.sh` | Host `initializeCommand`: derives the per-project `DEVCONTAINER_NAME` and writes `.devcontainer/.env`. `--dry-run` prints the resolved names without side effects. |
+| `.devcontainer/init.sh` | Host `initializeCommand`: derives the per-project `DEVCONTAINER_NAME`, writes `.devcontainer/.env` and pre-creates the persist dir. Optional — the compose fallbacks cover a bare `docker compose up`. `--dry-run` prints the resolved names without side effects. |
 | `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup` and the `afk`/`hitl` launchers. When built for publishing (`BAKE_ORCHESTRATOR=1`) it also bakes the orchestrator source + workflow commands + upstream skills (ADR-0016/0017). |
 | `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), host ssh-agent socket (ADR-0026), Claude persist dir, Docker socket. Every var has a fallback, so it boots standalone without `init.sh`. |
 | `.devcontainer/devcontainer.json` | `claude-code` + `docker-outside-of-docker` features; in-project `initializeCommand` → `init.sh`; `postCreateCommand` → `claude-persist-setup`. |
-| `.devcontainer/init.sh` | Host-side: generates `.env`, pre-creates the persist dir. Optional — the compose fallbacks cover a bare `docker compose up`. |
+| `.devcontainer/cockpit` | Launches Claude Code at the workspace root for [cockpit mode](#cockpit-mode) (ADR-0018). |
+| `.devcontainer/cockpit-settings.json` | Global `~/.claude/settings.json` baked into the image (pre-allows `gh`, `git`, `afk`, `hitl`). |
+| `.devcontainer/afk` | Baked as `afk` (and `hitl` symlink): resolves the project root and launches `.sandcastle/run.sh`. |
+| `.devcontainer/devcontainer.build.json` | Build-only, dockerfile-based config used by CI to publish the multi-arch outer image (ADR-0015); must mirror `devcontainer.json`'s Dockerfile + features. |
 | `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount; installs the baked workflow commands → `~/.claude/commands` and upstream skills → `~/.claude/skills`. |
 
 ### Sandbox
@@ -224,7 +274,7 @@ with the devcontainer CLI, not a plain `docker build`; the workflow is
 
 The published image also **bakes the orchestrator source** into
 `/opt/agentic-orchestrator` (ADR-0016), so an adopter using it doesn't need to
-vendor `.sandcastle/*.ts` at all — keep only your **config** in `.sandcastle/`
+vendor `.sandcastle/src/` at all — keep only your **config** in `.sandcastle/`
 (`orchestrator.env`, `.env`, `opencode.json`) and run `afk`/`hitl`. The launchers
 prefer a workspace `.sandcastle/` when it carries the source (so this repo and any
 vendoring project still run their own copy) and fall back to the baked one
@@ -254,7 +304,7 @@ services:
 or keep `build:` and add the published image as a cache source so `devcontainer up`
 is a registry cache hit rather than a full rebuild. **This repo dogfoods the
 published image** — its `docker-compose.yml` uses `image:` (with `build:` kept as a
-commented fallback); the workspace still carries `.sandcastle/*.ts`, so the
+commented fallback); the workspace still carries `.sandcastle/src/`, so the
 orchestrator runs from the workspace source while the devcontainer itself comes
 from GHCR.
 
@@ -287,7 +337,7 @@ Pull the prebuilt `sandbox-opencode` image or build it locally — see
 docker build -f .sandcastle/docker/Dockerfile.opencode -t sandcastle-opencode:local .sandcastle
 ```
 
-This image ships the `opencode` CLI (pinned `opencode-ai@1.19.5`) instead of Claude Code. The provider config in `opencode.json` (repo root) points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
+This image ships the `opencode` CLI (version pinned in `Dockerfile.opencode`) instead of Claude Code. The provider config in `opencode.json` (repo root) points opencode at the host Ollama; on sandbox start an `onSandboxReady` hook copies it into opencode's **global** config dir (`~/.config/opencode/`) — opencode resolves its provider from there, not the worktree cwd, so this step is what makes the model actually load.
 
 **Run the orchestrator on the local tier**
 
@@ -314,7 +364,7 @@ The same arguments work from the `/afk` and `/hitl` slash commands (e.g. `/afk l
 | `AGENTIC_LOCAL_MODEL` | `ollama/qwen3-coder:30b` | opencode model ref (`ollama/<model>`); the model must exist in `ollama list`. |
 | `SANDCASTLE_OPENCODE_IMAGE` | `sandcastle-opencode:local` | Inner image for the local tier. |
 
-To add a model, pull it in Ollama and add it to the `models` map in `opencode.json` (repo root), then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
+To add a model, pull it in Ollama and add it to the `models` map in `opencode.json` (repo root — the authoritative copy; `examples/local-ollama/opencode.json` is a template to copy into your project), then pass it as the model argument (or via `AGENTIC_LOCAL_MODEL`). Verify reachability from a container with `docker run --rm --add-host=host.docker.internal:host-gateway curlimages/curl -s http://host.docker.internal:11434/api/tags`.
 
 ## Context compression (headroom)
 
@@ -336,13 +386,24 @@ The `headroom` service is only started with `--profile headroom` — a bare `doc
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `HEADROOM_MODE` | `off` | `conservative` or `aggressive` enables compression; read by `context-compressor.ts`. |
-| `HEADROOM_MODEL` | `claude-sonnet-4-6` | Model the proxy compresses for. |
+| `HEADROOM_MODEL` | `claude-sonnet-4-6` | Model the proxy compresses for (compose passes it empty when unset; `context-compressor.ts` applies this default). |
 | `HEADROOM_BASE_URL` | `http://headroom:8787` | Where the *outer* devcontainer's one-shot `compress()` call reaches the proxy (compose-internal DNS). Override to point at Headroom Cloud instead. |
 | `HEADROOM_API_KEY` | unset | Headroom Cloud key, if using the cloud service instead of the local proxy. |
 
 The *inner* sandbox reaches the proxy differently — via `host.docker.internal:8787` (same mechanism the local/Ollama tier uses, since it's a docker-outside-of-docker sibling container on a separate network from the compose project). Confirm the proxy container is up with `docker compose -f .devcontainer/docker-compose.yml --profile headroom ps`.
 
 Live-verified (ADR-0023's addendum): `CLAUDE_CODE_OAUTH_TOKEN`'s subscription-OAuth flow survives being routed through the proxy — no `ANTHROPIC_API_KEY` needed for a subscription-only setup.
+
+## Documentation map
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/architecture.md](docs/architecture.md) | Current-state design in one page |
+| [docs/adr/](docs/adr/README.md) | Decision records (index with status) |
+| [CONTEXT.md](CONTEXT.md) | Glossary / ubiquitous language |
+| [CLAUDE.md](CLAUDE.md) | Operating contract for the agent |
+| [docs/prd.md](docs/prd.md) | Product requirements for this repo |
+| [examples/](examples/) | Ready-made configurations |
 
 ## Example configurations
 
