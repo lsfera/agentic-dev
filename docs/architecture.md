@@ -37,9 +37,9 @@ usage are in the [README](../README.md); the agent operating contract is
 2. Sandbox implements with `/tdd`, commits, and a PR is opened → `agent:in-review`.
 3. **`/afk`**: a read-only reviewer sandbox returns `pass` or `changes-requested` (a failure resolves to `changes-requested`). `pass` enables GitHub-native auto-merge, which lands when required CI is green (ADR-0020). **`/hitl`**: no review sandbox; the PR waits for a human merge (ADR-0020).
 4. A `PR merged` webhook (smee.io relay) unblocks dependents; a periodic re-derivation from live GitHub state is the backstop for missed deliveries. The HMAC signature is advisory because smee re-serialises bodies (ADR-0008).
-5. Failures re-label the issue `ready-for-agent` up to `maxRetries` (default 2) per run; startup reconciles any leftover `agent:*` labels from a crashed run (ADR-0021).
+5. Failures re-label the issue `ready-for-agent` up to `maxRetries` (default 2); attempts are persisted as hidden marker comments on the issue, so restarts don't reset the budget. Startup reconciles any leftover `agent:*` labels from a crashed run (ADR-0021).
 
-State transitions are pure functions in `reduce.ts`; the orchestrator (`main.ts`) carries out the emitted actions. Adapters (`IssueSource`, `SandboxRunner`, `ReviewerAdapter`, memory store) return Effects with typed errors (ADR-0028).
+`/afk` also runs a preflight that checks the base branch requires a status check (`preflight.ts`). State transitions are pure functions in `reduce.ts`; the orchestrator (`main.ts`, with helpers in `env.ts`, `infra.ts`, `webhook.ts`, `attempts.ts`) carries out the emitted actions. Adapters (`IssueSource`, `SandboxRunner`, `ReviewerAdapter`, memory store) return Effects with typed errors (ADR-0028).
 
 ## Optional subsystems
 

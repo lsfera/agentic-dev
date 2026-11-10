@@ -10,6 +10,7 @@ This revises the launch model in ADR-0005: `/afk` no longer launches a one-shot 
 
 - **Bridge:** smee.io channel relays GitHub webhooks to the in-container listener. The unguessable channel URL is the trust boundary and is treated as sensitive.
 - **Signature is advisory, not a gate (revised, #26):** GitHub's HMAC is computed over the raw request bytes, but smee re-parses and re-serializes the body before relaying it, so the original bytes are gone. Re-stringifying the parsed body matches GitHub's signature for most payloads but not all — JSON number reformatting (`1.0`→`1`, `5e2`→`500`) makes a strict HMAC reject genuine deliveries. The listener therefore computes the signature verdict for observability and logs it, but **never rejects on it**; the secret channel URL is what gates access. To restore strict HMAC as a gate, replace smee with a raw-body-preserving relay.
+- **Strict mode (opt-in):** `WEBHOOK_SIGNATURE_STRICT=1` drops any delivery whose signature isn't `verified` (`shouldProcessDelivery`). Genuine deliveries lost to smee's re-serialization are recovered by the backstop below, so strictness costs latency, not correctness. The default stays advisory.
 - **Backstop:** webhook deliveries can be missed, so on startup and periodically the listener re-derives the ready-set from live GitHub state (labels + merged status) rather than trusting the event stream alone.
 
 ## Consequences

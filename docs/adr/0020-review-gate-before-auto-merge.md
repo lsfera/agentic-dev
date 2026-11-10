@@ -9,6 +9,7 @@ Auto-merge itself — `/afk` merges each PR once CI is green so a multi-layer de
 ## Auto-merge (original decision)
 
 - **Hard requirement:** every project run under `/afk` must have meaningful, *required* status checks and branch protection, so auto-merge gates on something real. Without trustworthy CI, `/afk` merges unreviewed code.
+- **Enforcement:** at `/afk` startup `preflight.ts` checks that the base branch requires a status check (classic branch protection or a ruleset) and warns if not; `AGENTIC_REQUIRE_BRANCH_PROTECTION=1` refuses to start. `AGENTIC_SKIP_PROTECTION_CHECK=1` disables it. `/hitl` skips the check.
 - **Mechanism:** GitHub-native auto-merge (`gh pr merge --auto`); the orchestrator enables it rather than polling CI and merging itself.
 - **Consequences:** truly hands-off multi-layer runs, bounded by required CI and serial execution (ADR-0003). Because auto-merge completes asynchronously, the orchestrator reconciles with merges that land after the sandbox has closed (ADR-0008). A bad early merge can cascade into dependents; serial execution limits the blast radius to one issue.
 

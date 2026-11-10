@@ -174,13 +174,13 @@ Supporting commands:
 
 `agent:in-progress` / `agent:in-review` mirror the orchestrator's in-flight state and are read once at startup to recover work left mid-flight by a crashed run ([ADR-0021](docs/adr/0021-durable-agent-lifecycle-labels.md)); the orchestrator creates them idempotently.
 
-**Retries.** If a sandbox throws or produces no commits, the issue is re-labelled `ready-for-agent` and retried up to `Policy.maxRetries` times per run (default 2); after that it is left unlabelled with an explanatory comment. Attempt counts live in the orchestrator's in-run state and reset on restart, so a persistently failing issue gets another `maxRetries` attempts per fresh run.
+**Retries.** If a sandbox throws or produces no commits, the issue is re-labelled `ready-for-agent` and retried up to `Policy.maxRetries` times per run (default 2); after that it is left unlabelled with an explanatory comment. Attempts are persisted on the issue as hidden marker comments, so a restart cannot reset the budget; re-labelling an exhausted issue `ready-for-agent` starts a fresh one.
 
 ### Orchestrator behaviour (`/afk`)
 
 - **Review gate** ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)): after the implementing sandbox opens a PR, a reviewer sandbox checks the diff against the issue's acceptance criteria. Only a `pass` verdict proceeds; `changes-requested` parks the PR for a human.
-- **Auto-merge** ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)): on `pass`, GitHub-native auto-merge merges the PR once CI is green. CI must be meaningful and required — configure branch protection. `/hitl` keeps a human merge gate instead ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)).
-- **Event-driven** ([ADR-0008](docs/adr/0008-event-driven-orchestration-via-smee.md)): a persistent listener reacts to `PR merged` webhooks relayed via smee.io, and periodically re-derives the ready-set from live GitHub state as a backstop.
+- **Auto-merge** ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)): on `pass`, GitHub-native auto-merge merges the PR once CI is green. CI must be meaningful and required — at startup `/afk` checks that the base branch requires a status check (branch protection or a ruleset) and warns if not; set `AGENTIC_REQUIRE_BRANCH_PROTECTION=1` to refuse to start instead (`AGENTIC_SKIP_PROTECTION_CHECK=1` disables the check). `/hitl` keeps a human merge gate instead ([ADR-0020](docs/adr/0020-review-gate-before-auto-merge.md)).
+- **Event-driven** ([ADR-0008](docs/adr/0008-event-driven-orchestration-via-smee.md)): a persistent listener reacts to `PR merged` webhooks relayed via smee.io, and periodically re-derives the ready-set from live GitHub state as a backstop. Webhook signatures are advisory by default (the secret channel URL is the trust boundary); set `WEBHOOK_SIGNATURE_STRICT=1` to drop any delivery without a verified HMAC — the backstop poll recovers genuine merges that strict mode drops.
 - **Cross-run memory** ([ADR-0022](docs/adr/0022-cross-run-agent-memory.md)): facts learned by earlier runs are stored in a pinned `agent:memory` issue and injected into implementer prompts.
 - **Per-language skills** ([ADR-0025](docs/adr/0025-per-language-skills-via-onsandboxready.md)): toolchain comes from a per-language inner image (`.sandcastle/docker/Dockerfile.dotnet`), and team conventions are injected as Claude skills by pointing `SANDCASTLE_SKILLS_DIR` at a repo-relative directory of `SKILL.md` folders — copied into each inner sandbox's `~/.claude/skills`, no image rebuild (see [`examples/dotnet-project`](examples/dotnet-project/)).
 - **Implementation** is built on Effect 4 ([ADR-0028](docs/adr/0028-effect-4-orchestrator.md)); sources are in `.sandcastle/src/`, with prompts in `.sandcastle/prompts/` and inner-image Dockerfiles in `.sandcastle/docker/` ([ADR-0027](docs/adr/0027-sandcastle-directory-layout.md)).
@@ -393,6 +393,10 @@ The `headroom` service is only started with `--profile headroom` — a bare `doc
 The *inner* sandbox reaches the proxy differently — via `host.docker.internal:8787` (same mechanism the local/Ollama tier uses, since it's a docker-outside-of-docker sibling container on a separate network from the compose project). Confirm the proxy container is up with `docker compose -f .devcontainer/docker-compose.yml --profile headroom ps`.
 
 Live-verified (ADR-0023's addendum): `CLAUDE_CODE_OAUTH_TOKEN`'s subscription-OAuth flow survives being routed through the proxy — no `ANTHROPIC_API_KEY` needed for a subscription-only setup.
+
+## Development and CI
+
+From `.sandcastle/`: `npm test` (all `src/**/*.test.ts`; the Docker integration test is skipped unless `SANDCASTLE_INTEGRATION=1`, run it with `npm run test:integration`) and `npm run typecheck` (also fails on unused locals). From the repo root: `node scripts/check-docs.mjs` verifies markdown links, ADR references and ADR status lines. CI (`.github/workflows/ci.yml`) runs the typecheck and tests, the docs check, shell-script and compose validation plus a secrets check on tracked templates, and builds all three inner Dockerfiles (without pushing).
 
 ## Documentation map
 

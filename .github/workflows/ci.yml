@@ -20,3 +20,46 @@ jobs:
       - run: npm install
       - run: npm run typecheck
       - run: npm test
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - name: Docs links, ADR references and status lines
+        run: node scripts/check-docs.mjs
+
+  config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shell scripts parse
+        run: |
+          for f in up.sh down.sh code.sh .devcontainer/init.sh .devcontainer/cockpit .devcontainer/afk .devcontainer/claude-persist-setup .sandcastle/run.sh; do
+            bash -n "$f"
+          done
+      - name: init.sh dry run
+        run: bash .devcontainer/init.sh --dry-run "$PWD"
+      - name: Compose file validates
+        run: docker compose -f .devcontainer/docker-compose.yml config -q
+      - name: No real secrets in tracked example/env templates
+        run: |
+          if git grep -nE '(ghp_|github_pat_|gho_|sk-ant-|CLAUDE_CODE_OAUTH_TOKEN=[^[:space:]#])' -- 'examples/*/orchestrator.env' '.sandcastle/*.example' '.devcontainer/.env.example'; then
+            echo "Possible secret in a tracked template" >&2; exit 1
+          fi
+          if git grep -nE '^(GH_TOKEN|WEBHOOK_SECRET|ANTHROPIC_API_KEY|HEADROOM_API_KEY)=[^[:space:]#]' -- 'examples/*/orchestrator.env' '.sandcastle/*.example' '.devcontainer/.env.example'; then
+            echo "Non-empty secret value in a tracked template" >&2; exit 1
+          fi
+
+  inner-images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile: [Dockerfile, Dockerfile.opencode, Dockerfile.dotnet]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build ${{ matrix.dockerfile }} (no push)
+        run: docker build -f .sandcastle/docker/${{ matrix.dockerfile }} -t "ci-${{ matrix.dockerfile }}" .sandcastle

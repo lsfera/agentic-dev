@@ -8,7 +8,7 @@ in TypeScript string arrays, and relying on `run()`'s internal teardown. This
 was functional but kept bespoke lifecycle logic in the adapter rather than
 delegating it to the library.
 
-`@ai-hero/sandcastle@0.10.0` ships a higher-level API — `createSandbox` +
+`@ai-hero/sandcastle@0.10.0` (the version at the time; `package.json` now tracks newer releases) ships a higher-level API — `createSandbox` +
 `await using` + `hooks.onSandboxReady` + `promptFile`/`promptArgs` — that owns
 worktree creation, scope-bound disposal, declarative in-sandbox setup, and
 prompt template substitution. Adopting it shrinks the adapter to its essential

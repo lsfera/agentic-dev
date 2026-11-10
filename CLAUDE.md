@@ -120,10 +120,12 @@ re-labels the issue `ready-for-agent` so the next tick picks it up again, up to
 `Policy.maxRetries` times per run (default **2**). After the cap the issue is left
 unlabelled and a comment explains the exhaustion — never an infinite retry loop.
 
-**Known limitation:** attempt counts live in the orchestrator's in-run state and
-reset when the orchestrator restarts. A persistently-failing issue gets another
-`maxRetries` attempts on each fresh orchestrator run. In-run bounding is sufficient
-for v1; cross-run persistence is not implemented.
+**Cross-run persistence:** each failed attempt posts a hidden `<!-- agentic:attempt-failed -->`
+comment on the issue, and exhaustion posts `<!-- agentic:retries-exhausted -->`. On first sight of
+an issue in a run the orchestrator counts attempt markers after the last exhaustion marker, so a
+restart cannot grant a fresh budget. Re-labelling an exhausted issue `ready-for-agent` starts a new
+budget (the exhaustion marker resets the count). If the comments can't be read the count falls back
+to 0 (fail-open).
 
 ### Implementation approach
 
