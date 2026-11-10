@@ -84,7 +84,7 @@ services:
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # Context compression (headroom-ai, .sandcastle/context-compressor.ts) — off
+      # Context compression (headroom-ai, .sandcastle/src/context-compressor.ts) — off
       # by default (HEADROOM_MODE=off). HEADROOM_BASE_URL defaults to the sibling
       # `headroom` service below (opt-in via `--profile headroom`, since most runs
       # never touch this); override to point at Headroom Cloud instead. Without
@@ -157,7 +157,7 @@ services:
     # sandbox — a docker-outside-of-docker sibling container on the separate
     # agentic-sandbox-net, not this compose project's network — can reach it,
     # the latter via host.docker.internal:8787, to route Claude Code's live
-    # API traffic through the proxy (.sandcastle/sandbox-runner.ts). The
+    # API traffic through the proxy (.sandcastle/src/sandbox-runner.ts). The
     # outer devcontainer service still resolves `headroom` directly by
     # compose DNS for its own one-shot compress() calls.
     ports:

@@ -901,7 +901,7 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
           const followUps = reduce(reconcileState, { type: "ReviewFinished", issue: n, pr, verdict });
           yield* applyReviewActions(followUps, n, output, prefix);
         });
-        background.push(yield* Effect.forkDetach(rereview));
+        background.push(yield* Effect.forkChild(rereview));
       }
     }
   }
@@ -1097,7 +1097,7 @@ const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () 
       const n = start.issueId;
       inFlight.push(n);
       console.log(`[${mode}] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
-      background.push(yield* Effect.forkDetach(handleIssue(n, { ready, allPrs })));
+      background.push(yield* Effect.forkChild(handleIssue(n, { ready, allPrs })));
     }
 
     // Sleep before the next reconciliation poll.
