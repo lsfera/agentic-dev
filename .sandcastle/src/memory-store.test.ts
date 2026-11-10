@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readMemoryContext, writeMemoryEntry, type MemoryIssueSource } from "./memory-store.ts";
+import { readMemoryContext, writeMemoryEntry, type MemoryIssueSourcePromise as MemoryIssueSource } from "./memory-store.ts";
 import { formatMemoryComment } from "./memory.ts";
 
 function stubIssues(overrides: Partial<MemoryIssueSource> = {}): MemoryIssueSource & {

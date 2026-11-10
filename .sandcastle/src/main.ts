@@ -26,7 +26,6 @@
  * N inner Docker sandboxes, N read-only SSH-key copies (ADR-0004), and
  * N concurrent Claude subscription seats. The safe default stays serial (1).
  */
-import { createHmac } from "node:crypto";
 import * as https from "node:https";
 import * as http from "node:http";
 import { execFile, spawn } from "node:child_process";
@@ -38,9 +37,12 @@ import { reduce, READY_LABEL, IN_PROGRESS_LABEL, IN_REVIEW_LABEL, reviewVerdict,
 import { IssueSource } from "./issue-source.ts";
 import { SandboxRunner, SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 import { ReviewerAdapter } from "./reviewer-adapter.ts";
-import { readMemoryContext, writeMemoryEntry } from "./memory-store.ts";
+import { readMemoryContextEffect, writeMemoryEntryEffect } from "./memory-store.ts";
 import { parseMemoryTags, buildOutcomeEntry, type OutcomeAttempt } from "./memory.ts";
-import { withRetry } from "./retry.ts";
+import { Effect, Fiber, Layer } from "effect";
+import { Mac, SecureRandom } from "effect/crypto";
+import { GhError, ShellError, SandboxError } from "./errors.ts";
+import { withRetry, retryEffect } from "./retry.ts";
 export { withRetry };
 
 export { SANDBOX_LABEL };
@@ -204,16 +206,46 @@ type ShellExec = (file: string, args: string[]) => Promise<{ stdout: string | Bu
 
 type GitRun = (args: string[]) => Promise<unknown>;
 
+/** Lift a Promise-returning shell seam into a typed Effect. */
+const shell = (exec: ShellExec, file: string, args: string[]) =>
+  Effect.tryPromise({
+    try: () => exec(file, args),
+    catch: (cause) => new ShellError({ command: `${file} ${args.join(" ")}`, cause }),
+  });
+
+/** The underlying error behind a typed wrapper, for log output. */
+const causeOf = (err: unknown): unknown =>
+  err && typeof err === "object" && "cause" in err && (err as { cause?: unknown }).cause !== undefined
+    ? (err as { cause: unknown }).cause
+    : err;
+
+/** A human-readable one-liner for a failure (stored in the memory entry). */
+const noteOf = (err: unknown): string => {
+  const c = causeOf(err);
+  return c instanceof Error ? c.message : String(c);
+};
+
+/** Log-and-continue: turn any failure of `eff` into a console.error. */
+const orLog =
+  (message: string) =>
+  <A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<void, never, R> =>
+    eff.pipe(
+      Effect.asVoid,
+      Effect.catch((err) => Effect.sync(() => console.error(message, causeOf(err)))),
+    );
+
 /**
  * Delete the stale local and remote `agent/issue-N` branch before starting a
  * new sandbox. Best-effort — both deletions silently succeed if the branch is
  * absent. Accepts an injectable gitRun for unit testing (#23).
  */
-export async function resetAgentBranch(issueId: number, gitRun: GitRun): Promise<void> {
+export const resetAgentBranchEffect = (issueId: number, gitRun: GitRun): Effect.Effect<void> => {
   const branch = `agent/issue-${issueId}`;
-  try { await gitRun(["branch", "-D", branch]); } catch {}
-  try { await gitRun(["push", "origin", "--delete", branch]); } catch {}
-}
+  const git = (args: string[]) => Effect.tryPromise(() => gitRun(args)).pipe(Effect.ignore);
+  return git(["branch", "-D", branch]).pipe(
+    Effect.andThen(git(["push", "origin", "--delete", branch])),
+  );
+};
 
 /**
  * Refresh the local base branch to match the remote before a sandbox branch is
@@ -223,41 +255,45 @@ export async function resetAgentBranch(issueId: number, gitRun: GitRun): Promise
  * (#28 — bit the #15 and #23 runs). Fetch + hard-reset the local base to
  * `origin/<base>` so every sandbox branches from current origin.
  *
- * Best-effort and non-fatal: the fetch is retried (withRetry) and any failure
- * is logged but swallowed — a refresh failure must not crash the run; the
- * sandbox proceeds from whatever base exists. Complements resetAgentBranch
- * (#23): that deletes the stale *branch*, this refreshes the *base*. Injectable
- * gitRun + sleep for unit testing.
+ * Best-effort and non-fatal: the fetch is retried and any failure is logged
+ * but swallowed — a refresh failure must not crash the run; the sandbox
+ * proceeds from whatever base exists. Complements resetAgentBranch (#23): that
+ * deletes the stale *branch*, this refreshes the *base*. Injectable gitRun +
+ * sleep for unit testing.
  */
-export async function refreshBase(
+export const refreshBaseEffect = (
   base: string,
   gitRun: GitRun,
   opts: { sleep?: (ms: number) => Promise<void> } = {},
-): Promise<void> {
-  try {
-    await withRetry(() => gitRun(["fetch", "origin", base]), {
-      label: `fetch origin ${base}`,
-      sleep: opts.sleep,
-    });
-    await gitRun(["checkout", base]);
-    await gitRun(["reset", "--hard", `origin/${base}`]);
-  } catch (err) {
-    console.warn(
-      `[base-refresh] could not refresh '${base}' from origin ` +
-        `(continuing on existing base):`,
-      err,
-    );
-  }
-}
+): Effect.Effect<void> => {
+  const git = (args: string[]) => Effect.tryPromise({ try: () => gitRun(args), catch: (e) => e });
+  return retryEffect(git(["fetch", "origin", base]), {
+    label: `fetch origin ${base}`,
+    sleep: opts.sleep,
+  }).pipe(
+    Effect.andThen(git(["checkout", base])),
+    Effect.andThen(git(["reset", "--hard", `origin/${base}`])),
+    Effect.asVoid,
+    Effect.catch((err) =>
+      Effect.sync(() =>
+        console.warn(
+          `[base-refresh] could not refresh '${base}' from origin ` +
+            `(continuing on existing base):`,
+          err,
+        ),
+      ),
+    ),
+  );
+};
 
 /**
  * Remove orphaned containers that carry the agentic sandbox label.
  *
  * Called on startup (sweeps orphans from a previous crashed run) and at the
  * end of main() (confirms no containers linger after a clean exit). Each
- * individual run() call already closes its sandbox in a finally block via
- * sandcastle's internal lifecycle management; this sweep is a belt-and-
- * suspenders backstop for the SIGKILL / OOM case where those hooks never fire.
+ * sandbox is an acquire/release resource that closes on completion or
+ * interruption; this sweep is a belt-and-suspenders backstop for the
+ * SIGKILL / OOM case where those finalizers never fire.
  *
  * When `project` is given the sweep is scoped to that project (#40): a
  * container is removed only if its `agentic.sandbox.project` label matches —
@@ -269,12 +305,12 @@ export async function refreshBase(
  *
  * Accepts an optional exec shim for unit testing.
  */
-export async function sweepOrphanedSandboxes(
+export const sweepOrphanedSandboxesEffect = (
   exec: ShellExec = sh as ShellExec,
   project?: string,
-): Promise<number> {
-  try {
-    const { stdout } = await exec("docker", [
+): Effect.Effect<number> =>
+  Effect.gen(function* () {
+    const { stdout } = yield* shell(exec, "docker", [
       "ps", "-a", "--no-trunc",
       "--filter", `label=${SANDBOX_LABEL}`,
       "--format", `{{.ID}}\t{{.Label "${PROJECT_LABEL_KEY}"}}`,
@@ -291,16 +327,13 @@ export async function sweepOrphanedSandboxes(
       .filter(({ labelProject }) => !project || labelProject === "" || labelProject === project)
       .map(({ id }) => id);
     if (ids.length === 0) return 0;
-    await exec("docker", ["rm", "-f", ...ids]);
+    yield* shell(exec, "docker", ["rm", "-f", ...ids]);
     console.log(
       `[afk] swept ${ids.length} orphaned sandbox container(s)` +
         (project ? ` for project '${project}'` : ""),
     );
     return ids.length;
-  } catch {
-    return 0;
-  }
-}
+  }).pipe(Effect.orElseSucceed(() => 0));
 
 /** Default inner-sandbox network name and MTU (#48). */
 export const SANDBOX_NETWORK = process.env.AGENTIC_SANDBOX_NETWORK ?? "agentic-sandbox-net";
@@ -323,77 +356,104 @@ export const SANDBOX_MTU = process.env.AGENTIC_SANDBOX_MTU ?? "1400";
  * (e.g. it already exists with a different driver) is logged, not fatal; the run
  * falls back to the default network. Accepts an exec shim for unit testing.
  */
-export async function ensureSandboxNetwork(
+export const ensureSandboxNetworkEffect = (
   name: string = SANDBOX_NETWORK,
   mtu: string = SANDBOX_MTU,
   exec: ShellExec = sh as ShellExec,
-): Promise<boolean> {
-  try {
-    await exec("docker", ["network", "inspect", name]);
-    return true; // already exists
-  } catch {
-    // not present — create it
-  }
-  try {
-    await exec("docker", [
-      "network", "create",
-      "--opt", `com.docker.network.driver.mtu=${mtu}`,
-      name,
-    ]);
-    console.log(`[afk] created sandbox network '${name}' (mtu ${mtu})`);
-    return true;
-  } catch (err) {
-    console.warn(
-      `[afk] could not create sandbox network '${name}' (continuing on default network):`,
-      err,
-    );
-    return false;
-  }
-}
+): Effect.Effect<boolean> =>
+  shell(exec, "docker", ["network", "inspect", name]).pipe(
+    Effect.as(true), // already exists
+    Effect.catch(() =>
+      // not present — create it
+      shell(exec, "docker", [
+        "network", "create",
+        "--opt", `com.docker.network.driver.mtu=${mtu}`,
+        name,
+      ]).pipe(
+        Effect.tap(() => Effect.sync(() => console.log(`[afk] created sandbox network '${name}' (mtu ${mtu})`))),
+        Effect.as(true),
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            console.warn(
+              `[afk] could not create sandbox network '${name}' (continuing on default network):`,
+              causeOf(err),
+            );
+            return false;
+          }),
+        ),
+      ),
+    ),
+  );
 
 /**
  * Idempotently ensure the two durable lifecycle labels exist in the GitHub repo
  * (ADR-0021). Uses `--force` so the call is safe to repeat on every boot.
  * Best-effort — any failure is logged and swallowed; the run continues.
  */
-async function ensureLifecycleLabels(repo?: string): Promise<void> {
+const ensureLifecycleLabels = (repo?: string): Effect.Effect<void> => {
   const repoFlag = repo ? ["-R", repo] : [];
   const labels: Array<{ name: string; color: string; description: string }> = [
     { name: IN_PROGRESS_LABEL, color: "0075ca", description: "Sandbox is actively implementing this issue" },
     { name: IN_REVIEW_LABEL, color: "e4e669", description: "AI reviewer is running on the open PR" },
   ];
-  for (const { name, color, description } of labels) {
-    try {
-      await sh("gh", [
+  return Effect.forEach(
+    labels,
+    ({ name, color, description }) =>
+      shell(sh as ShellExec, "gh", [
         ...repoFlag,
         "label", "create", name,
         "--color", color,
         "--description", description,
         "--force",
-      ]);
-    } catch {
-      // Label may already exist or gh may be unavailable — not fatal.
-    }
-  }
-}
+      ]).pipe(Effect.ignore), // Label may already exist or gh may be unavailable — not fatal.
+    { discard: true },
+  );
+};
+
+/** Promise facades — the stable, test-facing API over the Effect cores above. */
+export const resetAgentBranch = (issueId: number, gitRun: GitRun): Promise<void> =>
+  Effect.runPromise(resetAgentBranchEffect(issueId, gitRun));
+export const refreshBase = (
+  base: string,
+  gitRun: GitRun,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> => Effect.runPromise(refreshBaseEffect(base, gitRun, opts));
+export const sweepOrphanedSandboxes = (exec?: ShellExec, project?: string): Promise<number> =>
+  Effect.runPromise(sweepOrphanedSandboxesEffect(exec, project));
+export const ensureSandboxNetwork = (name?: string, mtu?: string, exec?: ShellExec): Promise<boolean> =>
+  Effect.runPromise(ensureSandboxNetworkEffect(name, mtu, exec));
+
+/** Web-Crypto-backed HMAC service (Effect's crypto module). */
+const MacLive = Mac.layerWebCrypto.pipe(Layer.provide(SecureRandom.layerWebCrypto));
+
+const SIGNATURE_RE = /^sha256=([0-9a-fA-F]{64})$/;
+
+const hexToBytes = (hex: string): Uint8Array =>
+  Uint8Array.from(hex.match(/../g) ?? [], (h) => parseInt(h, 16));
 
 /**
  * Constant-time HMAC-SHA256 validation for GitHub webhook signatures.
  * `signature` is the raw X-Hub-Signature-256 header value (`sha256=<hex>`).
+ * Malformed signatures (wrong prefix/length/non-hex) are simply `false`, as is
+ * any crypto failure — the result is advisory (see classifyDelivery).
  */
-export function validateSignature(
+export const validateSignatureEffect = (
   secret: string,
   rawBody: string,
   signature: string,
-): boolean {
-  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
-  if (signature.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) {
-    diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
-  }
-  return diff === 0;
-}
+): Effect.Effect<boolean> => {
+  const match = SIGNATURE_RE.exec(signature);
+  if (!match) return Effect.succeed(false);
+  const encoder = new TextEncoder();
+  return Effect.gen(function* () {
+    const mac = yield* Mac.Mac;
+    const key = yield* Mac.key(Mac.hmacSha256, encoder.encode(secret));
+    return yield* mac.verify(key, hexToBytes(match[1]), encoder.encode(rawBody));
+  }).pipe(Effect.provide(MacLive), Effect.orElseSucceed(() => false));
+};
+
+export const validateSignature = (secret: string, rawBody: string, signature: string): Promise<boolean> =>
+  Effect.runPromise(validateSignatureEffect(secret, rawBody, signature));
 
 /** Outcome of checking a smee-relayed delivery's signature (#26). */
 export type SignatureVerdict = "verified" | "mismatch" | "missing-signature" | "no-secret";
@@ -411,15 +471,23 @@ export type SignatureVerdict = "verified" | "mismatch" | "missing-signature" | "
  * the caller logs and proceeds. (To restore strict HMAC as a gate, put a
  * raw-body-preserving relay in front of the orchestrator instead of smee.)
  */
-export function classifyDelivery(
+export const classifyDeliveryEffect = (
   secret: string | undefined,
   reserializedBody: string,
   signature: string | undefined,
-): SignatureVerdict {
-  if (!secret) return "no-secret";
-  if (!signature) return "missing-signature";
-  return validateSignature(secret, reserializedBody, signature) ? "verified" : "mismatch";
-}
+): Effect.Effect<SignatureVerdict> => {
+  if (!secret) return Effect.succeed("no-secret");
+  if (!signature) return Effect.succeed("missing-signature");
+  return validateSignatureEffect(secret, reserializedBody, signature).pipe(
+    Effect.map((ok): SignatureVerdict => (ok ? "verified" : "mismatch")),
+  );
+};
+
+export const classifyDelivery = (
+  secret: string | undefined,
+  reserializedBody: string,
+  signature: string | undefined,
+): Promise<SignatureVerdict> => Effect.runPromise(classifyDeliveryEffect(secret, reserializedBody, signature));
 
 type SmeeHandler = (
   body: unknown,
@@ -514,22 +582,21 @@ export function startSmeeListener(
                   // the trust boundary; smee's body re-serialization means a
                   // strict HMAC would drop genuine deliveries (#26). Log the
                   // verdict, never reject on it.
-                  const verdict = classifyDelivery(
-                    secret,
-                    JSON.stringify(body),
-                    headers["x-hub-signature-256"],
-                  );
-                  if (verdict === "mismatch") {
-                    console.warn(
-                      "[smee] HMAC mismatch — likely smee body re-serialization, " +
-                        "not forgery; processing anyway (channel URL is the trust boundary, #26)",
-                    );
-                  } else if (verdict === "missing-signature") {
-                    console.warn(
-                      "[smee] no X-Hub-Signature-256 header; processing anyway " +
-                        "(channel URL is the trust boundary, #26)",
-                    );
-                  }
+                  void Effect.runPromise(
+                    classifyDeliveryEffect(secret, JSON.stringify(body), headers["x-hub-signature-256"]),
+                  ).then((verdict) => {
+                    if (verdict === "mismatch") {
+                      console.warn(
+                        "[smee] HMAC mismatch — likely smee body re-serialization, " +
+                          "not forgery; processing anyway (channel URL is the trust boundary, #26)",
+                      );
+                    } else if (verdict === "missing-signature") {
+                      console.warn(
+                        "[smee] no X-Hub-Signature-256 header; processing anyway " +
+                          "(channel URL is the trust boundary, #26)",
+                      );
+                    }
+                  });
 
                   void handler(body, headers, deliveryId);
                 } catch (e) {
@@ -566,7 +633,7 @@ export function startSmeeListener(
   connect();
 }
 
-async function main(): Promise<void> {
+const main: Effect.Effect<void, GhError | ShellError> = Effect.gen(function* () {
   const mode = (process.env.AGENTIC_MODE ?? "afk") as Mode;
 
   if (resolveRunMode(process.env) === 'detached') {
@@ -594,15 +661,15 @@ async function main(): Promise<void> {
 
   // Startup sweep: remove this project's orphaned containers from any previous
   // crashed run.
-  await sweepOrphanedSandboxes(sh as ShellExec, project);
+  yield* sweepOrphanedSandboxesEffect(sh as ShellExec, project);
 
   // Ensure the durable lifecycle labels exist (ADR-0021). Best-effort — a failure
   // does not block the run; labels are only missing on first run or if deleted.
-  await ensureLifecycleLabels(repo);
+  yield* ensureLifecycleLabels(repo);
 
   // Ensure the MTU-corrected sandbox network exists so the agent's streaming
   // responses don't stall on Docker Desktop's oversized default-bridge MTU (#48).
-  const networkReady = await ensureSandboxNetwork();
+  const networkReady = yield* ensureSandboxNetworkEffect();
   const network = networkReady ? SANDBOX_NETWORK : undefined;
 
   const issues = new IssueSource(repo);
@@ -631,6 +698,10 @@ async function main(): Promise<void> {
     baseBranch: base,
   });
 
+  // In-process scheduling state. Plain mutable structures on purpose: the
+  // reducer reads `inFlight` by reference, and the "check + add before the
+  // first suspension" dedupe below relies on fibers running synchronously
+  // until their first async step.
   const inFlight: number[] = [];
   // Per-issue count of SandboxFailed events dispatched this run. Persists
   // across ticks so the retry cap is enforced within a single orchestrator run.
@@ -639,39 +710,105 @@ async function main(): Promise<void> {
   // into a single outcome memory entry at terminal state (ADR-0022).
   const attemptHistory: Record<number, OutcomeAttempt[]> = {};
   // Issue ids whose PrMerged event has been dispatched to the reducer.
-  // Synchronous check + add before the first await ensures concurrent smee
-  // and reconciliation paths never double-dispatch the same merge.
   const seenMerges = new Set<number>();
   // GitHub X-GitHub-Delivery ids seen via smee — coarse delivery-level de-dupe.
   const seenDeliveries = new Set<string>();
+  // Background fibers (per-issue workers, boot-time re-reviews). Awaited before
+  // a clean exit so no in-progress work is cut short.
+  const background: Fiber.Fiber<void, never>[] = [];
 
   const policy: Policy = { concurrency: parseConcurrency(), mode };
+
+  /** gh call with the standard transient-failure backoff. */
+  const gh = <A>(label: string, eff: Effect.Effect<A, GhError>) => retryEffect(eff, { label });
+  const addLabel = (n: number, label: string) => gh(`addLabel #${n}`, issues.addLabel(n, label));
 
   // Dispatch a PrMerged event and execute the resulting Relabel actions.
   // Shared between the smee listener and the reconciliation poll; the
   // synchronous seenMerges check prevents double-dispatch.
-  async function handlePrMerged(pr: Pr, source: string): Promise<void> {
-    if (seenMerges.has(pr.issue)) return;
-    seenMerges.add(pr.issue); // must stay before the first await
+  const handlePrMerged = (pr: Pr, source: string): Effect.Effect<void, GhError> =>
+    Effect.gen(function* () {
+      if (seenMerges.has(pr.issue)) return;
+      seenMerges.add(pr.issue); // must stay before the first suspension
 
-    console.log(`[${mode}] PR for #${pr.issue} merged (${source}) — checking dependents`);
-    const allIssues = await withRetry(() => issues.listAll(), { label: "listAll" });
-    const mergedPrsNow = await withRetry(() => issues.listMergedPrs(), { label: "listMergedPrs" });
-    const openPrsNow = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs" });
-    const allPrsNow = [...mergedPrsNow, ...openPrsNow];
+      console.log(`[${mode}] PR for #${pr.issue} merged (${source}) — checking dependents`);
+      const allIssues = yield* gh("listAll", issues.listAll());
+      const mergedPrsNow = yield* gh("listMergedPrs", issues.listMergedPrs());
+      const openPrsNow = yield* gh("listOpenPrs", issues.listOpenPrs());
+      const allPrsNow = [...mergedPrsNow, ...openPrsNow];
 
-    const unblockState: State = { issues: allIssues, prs: allPrsNow, inFlight, policy };
-    const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
-    for (const action of unblockActions) {
-      if (action.type === "Relabel") {
-        console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
-        await withRetry(
-          () => issues.addLabel(action.issueId, action.label),
-          { label: `addLabel #${action.issueId}` },
-        );
+      const unblockState: State = { issues: allIssues, prs: allPrsNow, inFlight, policy };
+      const unblockActions = reduce(unblockState, { type: "PrMerged", pr });
+      for (const action of unblockActions) {
+        if (action.type === "Relabel") {
+          console.log(`[${mode}] #${pr.issue} merged → relabelling #${action.issueId} as ${action.label}`);
+          yield* addLabel(action.issueId, action.label);
+        }
       }
-    }
-  }
+    });
+
+  // Run the read-only AI review for #n's PR. Fail-safe: any reviewer or gh
+  // failure → changes-requested, so a crash can never auto-merge.
+  const reviewPr = (n: number, logPrefix: string) =>
+    Effect.gen(function* () {
+      const ghIssue = yield* issues.get(n);
+      const diff = yield* issues.getPrDiff(n);
+      return yield* reviewer.runReview(
+        {
+          issueNumber: n,
+          issueTitle: ghIssue.title,
+          issueBody: ghIssue.body,
+          branch: `agent/issue-${n}`,
+          prNumber: n,
+        },
+        diff,
+      );
+    }).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          console.warn(`${logPrefix} reviewer failed — defaulting to changes-requested:`, causeOf(err));
+          return { verdict: reviewVerdict(null), output: null as ReviewOutput | null };
+        }),
+      ),
+    );
+
+  // Execute the reducer's follow-up actions for a finished review.
+  const applyReviewActions = (
+    actions: ReturnType<typeof reduce>,
+    n: number,
+    reviewOutput: ReviewOutput | null,
+    logPrefix: string,
+    onAutoMerge: Effect.Effect<void> = Effect.void,
+  ) =>
+    Effect.forEach(
+      actions,
+      (ra) => {
+        switch (ra.type) {
+          case "RemoveLabel":
+            return issues.removeLabel(ra.issueId, ra.label).pipe(
+              orLog(`${logPrefix} could not remove label ${ra.label}:`),
+            );
+          case "EnableAutoMerge":
+            return Effect.sync(() => console.log(`${logPrefix} review passed → enabling auto-merge`)).pipe(
+              Effect.andThen(issues.enableAutoMerge(ra.pr.issue).pipe(orLog(`${logPrefix} could not enable auto-merge:`))),
+              // Terminal state (review passed — see ADR-0022 for why this,
+              // not the later async PrMerged, is treated as the success point).
+              Effect.andThen(onAutoMerge),
+            );
+          case "WaitForHuman":
+            return Effect.sync(() => console.log(`${logPrefix} review requested changes → parked for human`)).pipe(
+              Effect.andThen(
+                reviewOutput
+                  ? issues.postPrReview(n, reviewOutput).pipe(orLog(`${logPrefix} could not post PR review:`))
+                  : Effect.void,
+              ),
+            );
+          default:
+            return Effect.void;
+        }
+      },
+      { discard: true },
+    );
 
   // Start the smee webhook listener if SMEE_URL is configured (ADR-0008).
   // The reconciliation poll below acts as the backstop for missed deliveries.
@@ -679,6 +816,7 @@ async function main(): Promise<void> {
   const webhookSecret = process.env.WEBHOOK_SECRET;
 
   if (smeeUrl) {
+    // The listener is a callback API; each delivery is run as its own fiber.
     startSmeeListener(smeeUrl, webhookSecret, async (body, headers, deliveryId) => {
       if (deliveryId && seenDeliveries.has(deliveryId)) return;
       if (deliveryId) seenDeliveries.add(deliveryId);
@@ -704,11 +842,11 @@ async function main(): Promise<void> {
       const mergeSha = payload.pull_request.merge_commit_sha ?? "";
       console.log(`[smee] PR merge: issue #${issueId} branch=${branch} sha=${mergeSha.slice(0, 7)}`);
 
-      try {
-        await handlePrMerged({ issue: issueId, ciStatus: "success", merged: true }, `smee:${deliveryId}`);
-      } catch (err) {
-        console.error(`[smee] handlePrMerged #${issueId} failed:`, err);
-      }
+      await Effect.runPromise(
+        handlePrMerged({ issue: issueId, ciStatus: "success", merged: true }, `smee:${deliveryId}`).pipe(
+          orLog(`[smee] handlePrMerged #${issueId} failed:`),
+        ),
+      );
     });
   }
 
@@ -720,118 +858,197 @@ async function main(): Promise<void> {
   // in-flight work. Labels are written at each transition and read ONLY here at
   // startup; State.inFlight is the runtime source of truth thereafter.
   {
-    let bootIssues: import("./reduce.ts").Issue[] = [];
-    let bootOpenPrs: Pr[] = [];
-    try {
-      bootIssues = await withRetry(() => issues.listAll(), { label: "listAll (boot reconcile)" });
-      bootOpenPrs = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs (boot reconcile)" });
-    } catch (err) {
-      console.warn(`[${mode}] boot reconcile: could not fetch state — skipping:`, err);
-    }
+    const fetched = yield* Effect.all([
+      gh("listAll (boot reconcile)", issues.listAll()),
+      gh("listOpenPrs (boot reconcile)", issues.listOpenPrs()),
+    ]).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          console.warn(`[${mode}] boot reconcile: could not fetch state — skipping:`, causeOf(err));
+          return [[], []] as [import("./reduce.ts").Issue[], Pr[]];
+        }),
+      ),
+    );
+    const [bootIssues, bootOpenPrs] = fetched;
     const bootActions = reconcileFromLabels(bootIssues, bootOpenPrs);
     if (bootActions.length > 0) {
       console.log(`[${mode}] boot reconcile: ${bootActions.length} action(s) from crashed predecessor`);
     }
     for (const action of bootActions) {
       if (action.type === "RemoveLabel") {
-        try {
-          await issues.removeLabel(action.issueId, action.label);
-          console.log(`[${mode}] boot reconcile: #${action.issueId} removed label ${action.label}`);
-        } catch (err) {
-          console.error(`[${mode}] boot reconcile: could not remove label ${action.label} from #${action.issueId}:`, err);
-        }
+        yield* issues.removeLabel(action.issueId, action.label).pipe(
+          Effect.andThen(Effect.sync(() => console.log(`[${mode}] boot reconcile: #${action.issueId} removed label ${action.label}`))),
+          orLog(`[${mode}] boot reconcile: could not remove label ${action.label} from #${action.issueId}:`),
+        );
       }
       if (action.type === "Relabel") {
-        try {
-          await withRetry(() => issues.addLabel(action.issueId, action.label), { label: `addLabel #${action.issueId}` });
-          console.log(`[${mode}] boot reconcile: #${action.issueId} relabelled as ${action.label}`);
-        } catch (err) {
-          console.error(`[${mode}] boot reconcile: could not relabel #${action.issueId}:`, err);
-        }
+        yield* addLabel(action.issueId, action.label).pipe(
+          Effect.andThen(Effect.sync(() => console.log(`[${mode}] boot reconcile: #${action.issueId} relabelled as ${action.label}`))),
+          orLog(`[${mode}] boot reconcile: could not relabel #${action.issueId}:`),
+        );
       }
       if (action.type === "StartReview") {
         // Re-run the read-only AI review on the existing PR (idempotent).
-        // Fires in the background so startup is not blocked.
-        const reviewPr = action.pr;
-        const n = reviewPr.issue;
-        console.log(`[${mode}] boot reconcile: #${n} agent:in-review + open PR — re-running AI review`);
-        void (async () => {
-          let verdict: ReviewVerdict;
-          let reviewOutput: ReviewOutput | null = null;
-          try {
-            const ghIssue = await issues.get(n);
-            const diff = await issues.getPrDiff(n);
-            const result = await reviewer.runReview(
-              {
-                issueNumber: n,
-                issueTitle: ghIssue.title,
-                issueBody: ghIssue.body,
-                branch: `agent/issue-${n}`,
-                prNumber: n,
-              },
-              diff,
-            );
-            verdict = result.verdict;
-            reviewOutput = result.output;
-          } catch (err) {
-            console.warn(`[${mode}] boot reconcile: #${n} reviewer failed — defaulting to changes-requested:`, err);
-            verdict = reviewVerdict(null);
-          }
-          console.log(`[${mode}] boot reconcile: #${n} review verdict: ${verdict}`);
+        // Runs in the background so startup is not blocked.
+        const pr = action.pr;
+        const n = pr.issue;
+        const prefix = `[${mode}] boot reconcile: #${n}`;
+        console.log(`${prefix} agent:in-review + open PR — re-running AI review`);
+        const rereview = Effect.gen(function* () {
+          const { verdict, output } = yield* reviewPr(n, prefix);
+          console.log(`${prefix} review verdict: ${verdict}`);
           const reconcileState: State = { issues: bootIssues, prs: bootOpenPrs, inFlight, policy };
-          const reviewDoneActions = reduce(reconcileState, {
-            type: "ReviewFinished",
-            issue: n,
-            pr: reviewPr,
-            verdict,
-          });
-          for (const ra of reviewDoneActions) {
-            if (ra.type === "RemoveLabel") {
-              try { await issues.removeLabel(ra.issueId, ra.label); } catch {}
-            }
-            if (ra.type === "EnableAutoMerge") {
-              console.log(`[${mode}] boot reconcile: #${n} review passed → enabling auto-merge`);
-              try { await issues.enableAutoMerge(ra.pr.issue); } catch (err) {
-                console.error(`[${mode}] boot reconcile: #${n} could not enable auto-merge:`, err);
-              }
-            }
-            if (ra.type === "WaitForHuman") {
-              console.log(`[${mode}] boot reconcile: #${n} review requested changes → parked for human`);
-              if (reviewOutput) {
-                try { await issues.postPrReview(n, reviewOutput); } catch (err) {
-                  console.error(`[${mode}] boot reconcile: #${n} could not post PR review:`, err);
-                }
-              }
-            }
-          }
-        })();
+          const followUps = reduce(reconcileState, { type: "ReviewFinished", issue: n, pr, verdict });
+          yield* applyReviewActions(followUps, n, output, prefix);
+        });
+        background.push(yield* Effect.forkDetach(rereview));
       }
     }
   }
 
+  // Everything one claimed issue goes through once its sandbox is launched:
+  // run → record attempt → apply failure/finish transitions (+ AI review).
+  const handleIssue = (
+    n: number,
+    snapshot: { ready: import("./reduce.ts").Issue[]; allPrs: Pr[] },
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const result = yield* processIssue(n, issues, runner, base, repoRoot, mode).pipe(
+        Effect.map((pr) =>
+          pr === null
+            ? ({ openedPr: null, failed: true, note: "sandbox produced no commits" } as const)
+            : ({ openedPr: pr, failed: false, note: undefined } as const),
+        ),
+        Effect.tap((r) =>
+          r.failed ? Effect.sync(() => console.log(`[${mode}] #${n} sandbox produced no commits`)) : Effect.void,
+        ),
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            console.error(`[${mode}] #${n} failed:`, causeOf(err));
+            return { openedPr: null, failed: true, note: noteOf(err) } as const;
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => { inFlight.splice(inFlight.indexOf(n), 1); })),
+      );
+      const { openedPr, failed: sandboxFailed, note: failureNote } = result;
+      const { ready, allPrs } = snapshot;
+
+      // Record this attempt (ADR-0022) — flattened into a single outcome
+      // memory entry when the issue reaches terminal state below.
+      const history = attemptHistory[n] ?? (attemptHistory[n] = []);
+      history.push({ succeeded: !sandboxFailed, note: sandboxFailed ? failureNote : undefined });
+
+      if (sandboxFailed) {
+        const attempts = failedAttempts[n] ?? 0;
+        const failState: State = { issues: ready, prs: allPrs, inFlight, policy, failedAttempts };
+        const failActions = reduce(failState, { type: "SandboxFailed", issue: n });
+        failedAttempts[n] = attempts + 1;
+        for (const action of failActions) {
+          if (action.type === "RemoveLabel") {
+            yield* issues.removeLabel(action.issueId, action.label).pipe(
+              orLog(`[${mode}] #${n} could not remove label ${action.label}:`),
+            );
+          }
+          if (action.type === "Relabel") {
+            console.log(
+              `[${mode}] #${n} failed — re-queuing for retry ` +
+                `(${attempts + 1}/${policy.maxRetries ?? 2})`,
+            );
+            yield* addLabel(n, action.label).pipe(orLog(`[${mode}] #${n} could not re-queue:`));
+          }
+          if (action.type === "Comment") {
+            console.log(`[${mode}] #${n} retries exhausted after ${attempts + 1} failures`);
+            yield* issues.comment(n, action.body).pipe(
+              orLog(`[${mode}] #${n} could not post exhaustion comment:`),
+            );
+            // Terminal state (retries exhausted) — persist the outcome (ADR-0022).
+            yield* writeMemoryEntryEffect(issues, buildOutcomeEntry({ issueNumber: n, attempts: history }));
+          }
+        }
+      }
+
+      if (openedPr) {
+        const finishState: State = {
+          issues: ready,
+          prs: [...allPrs, openedPr],
+          inFlight,
+          policy,
+        };
+        const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
+        const prefix = `[${mode}] #${n}`;
+        for (const action of finishActions) {
+          if (action.type === "RemoveLabel") {
+            yield* issues.removeLabel(action.issueId, action.label).pipe(
+              orLog(`${prefix} could not remove label ${action.label}:`),
+            );
+          }
+          if (action.type === "Relabel") {
+            yield* addLabel(action.issueId, action.label).pipe(
+              orLog(`${prefix} could not add label ${action.label}:`),
+            );
+          }
+          if (action.type === "StartReview") {
+            console.log(`${prefix} → running AI review`);
+            const { verdict, output } = yield* reviewPr(n, prefix);
+            console.log(`${prefix} review verdict: ${verdict}`);
+            const reviewActions = reduce(finishState, {
+              type: "ReviewFinished",
+              issue: n,
+              pr: action.pr,
+              verdict,
+            });
+            yield* applyReviewActions(
+              reviewActions,
+              n,
+              output,
+              prefix,
+              writeMemoryEntryEffect(
+                issues,
+                buildOutcomeEntry({ issueNumber: n, prNumber: openedPr.prNumber, attempts: history }),
+              ),
+            );
+          }
+          if (action.type === "WaitForHuman") {
+            console.log(`${prefix} → PR open, waiting for human review`);
+          }
+        }
+      }
+    }).pipe(
+      // A defect (bug) in one issue's handling must never take down the loop.
+      Effect.catchCause((cause) =>
+        Effect.sync(() => console.error(`[${mode}] #${n} handler crashed:`, cause)),
+      ),
+    );
+
   for (;;) {
     // Wrap all top-of-loop gh calls so a transient API blip causes a retry
-    // rather than an unhandled rejection that exits the process. If all retries
+    // rather than an unhandled failure that exits the process. If all retries
     // fail we log the error and sleep before the next tick.
-    let mergedPrs: Awaited<ReturnType<typeof issues.listMergedPrs>> = [];
-    let allPrs: Awaited<ReturnType<typeof issues.listMergedPrs>> = [];
-    let ready: Awaited<ReturnType<typeof issues.listReady>> = [];
-    try {
-      mergedPrs = await withRetry(() => issues.listMergedPrs(), { label: "listMergedPrs" });
-      const openPrs = await withRetry(() => issues.listOpenPrs(), { label: "listOpenPrs" });
-      allPrs = [...mergedPrs, ...openPrs];
+    const poll = yield* Effect.gen(function* () {
+      const mergedPrs = yield* gh("listMergedPrs", issues.listMergedPrs());
+      const openPrs = yield* gh("listOpenPrs", issues.listOpenPrs());
+      const allPrs = [...mergedPrs, ...openPrs];
 
       // Reconciliation backstop: process any merges the smee listener may have missed.
       for (const pr of mergedPrs) {
-        await handlePrMerged(pr, "reconcile");
+        yield* handlePrMerged(pr, "reconcile");
       }
 
-      ready = await withRetry(() => issues.listReady(), { label: "listReady" });
-    } catch (err) {
-      console.error(`[${mode}] poll tick failed after retries — sleeping before next tick:`, err);
-      await new Promise<void>((r) => setTimeout(r, RECONCILE_INTERVAL));
+      const ready = yield* gh("listReady", issues.listReady());
+      return { ok: true, allPrs, ready } as const;
+    }).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          console.error(`[${mode}] poll tick failed after retries — sleeping before next tick:`, causeOf(err));
+          return { ok: false } as const;
+        }),
+      ),
+    );
+    if (!poll.ok) {
+      yield* Effect.sleep(RECONCILE_INTERVAL);
       continue;
     }
+    const { allPrs, ready } = poll;
 
     const state: State = {
       issues: ready,
@@ -844,8 +1061,10 @@ async function main(): Promise<void> {
 
     if (actions.some((a) => a.type === "Stop")) {
       console.log(`[${mode}] nothing ready, nothing in flight — done.`);
+      // Let any background work (e.g. boot-time re-reviews) finish first.
+      yield* Fiber.awaitAll(background);
       // Shutdown sweep: confirm no containers linger after a clean exit.
-      await sweepOrphanedSandboxes(sh as ShellExec, project);
+      yield* sweepOrphanedSandboxesEffect(sh as ShellExec, project);
       return;
     }
 
@@ -854,14 +1073,12 @@ async function main(): Promise<void> {
     );
 
     // Apply label transitions emitted by Tick (agent:in-progress for each claimed issue).
-    // Executed before the sandbox fire-and-forgots so the label is durable immediately.
+    // Executed before the sandboxes are forked so the label is durable immediately.
     for (const action of actions) {
       if (action.type === "Relabel") {
-        try {
-          await withRetry(() => issues.addLabel(action.issueId, action.label), { label: `addLabel #${action.issueId}` });
-        } catch (err) {
-          console.error(`[${mode}] could not add label ${action.label} to #${action.issueId}:`, err);
-        }
+        yield* addLabel(action.issueId, action.label).pipe(
+          orLog(`[${mode}] could not add label ${action.label} to #${action.issueId}:`),
+        );
       }
     }
 
@@ -869,263 +1086,130 @@ async function main(): Promise<void> {
       // No sandbox to start this tick — either waiting for CI on open PRs or
       // all slots are occupied. Sleep and poll again.
       console.log(`[${mode}] waiting for pending PRs or in-flight sandboxes...`);
-      await new Promise<void>((r) => setTimeout(r, RECONCILE_INTERVAL));
+      yield* Effect.sleep(RECONCILE_INTERVAL);
       continue;
     }
 
     // Launch every StartSandbox the reducer emitted this tick in parallel.
-    // Each fires independently; inFlight is updated synchronously so the next
+    // Each runs as its own fiber; inFlight is updated synchronously so the next
     // tick's reducer counts these as occupied slots and won't over-subscribe.
     for (const start of starts) {
       const n = start.issueId;
       inFlight.push(n);
       console.log(`[${mode}] #${n} starting (${inFlight.length}/${policy.concurrency} slots in use)`);
-
-      void (async () => {
-        let openedPr: (Pr & { prNumber?: number }) | null = null;
-        let sandboxFailed = false;
-        let failureNote: string | undefined;
-        try {
-          openedPr = await processIssue(n, issues, runner, base, repoRoot, mode);
-          if (openedPr === null) {
-            sandboxFailed = true;
-            failureNote = "sandbox produced no commits";
-            console.log(`[${mode}] #${n} sandbox produced no commits`);
-          }
-        } catch (err) {
-          console.error(`[${mode}] #${n} failed:`, err);
-          sandboxFailed = true;
-          failureNote = err instanceof Error ? err.message : String(err);
-        } finally {
-          inFlight.splice(inFlight.indexOf(n), 1);
-        }
-
-        // Record this attempt (ADR-0022) — flattened into a single outcome
-        // memory entry when the issue reaches terminal state below.
-        const history = attemptHistory[n] ?? (attemptHistory[n] = []);
-        history.push({ succeeded: !sandboxFailed, note: sandboxFailed ? failureNote : undefined });
-
-        if (sandboxFailed) {
-          const attempts = failedAttempts[n] ?? 0;
-          const failState: State = { issues: ready, prs: allPrs, inFlight, policy, failedAttempts };
-          const failActions = reduce(failState, { type: "SandboxFailed", issue: n });
-          failedAttempts[n] = attempts + 1;
-          for (const action of failActions) {
-            if (action.type === "RemoveLabel") {
-              try {
-                await issues.removeLabel(action.issueId, action.label);
-              } catch (err) {
-                console.error(`[${mode}] #${n} could not remove label ${action.label}:`, err);
-              }
-            }
-            if (action.type === "Relabel") {
-              console.log(
-                `[${mode}] #${n} failed — re-queuing for retry ` +
-                  `(${attempts + 1}/${policy.maxRetries ?? 2})`,
-              );
-              try {
-                await withRetry(() => issues.addLabel(n, action.label), { label: `addLabel #${n}` });
-              } catch (err) {
-                console.error(`[${mode}] #${n} could not re-queue:`, err);
-              }
-            }
-            if (action.type === "Comment") {
-              console.log(`[${mode}] #${n} retries exhausted after ${attempts + 1} failures`);
-              try {
-                await issues.comment(n, action.body);
-              } catch (err) {
-                console.error(`[${mode}] #${n} could not post exhaustion comment:`, err);
-              }
-              // Terminal state (retries exhausted) — persist the outcome (ADR-0022).
-              await writeMemoryEntry(issues, buildOutcomeEntry({ issueNumber: n, attempts: history }));
-            }
-          }
-        }
-
-        if (openedPr) {
-          const finishState: State = {
-            issues: ready,
-            prs: [...allPrs, openedPr],
-            inFlight,
-            policy,
-          };
-          const finishActions = reduce(finishState, { type: "SandboxFinished", issue: n, pr: openedPr });
-          for (const action of finishActions) {
-            if (action.type === "RemoveLabel") {
-              try {
-                await issues.removeLabel(action.issueId, action.label);
-              } catch (err) {
-                console.error(`[${mode}] #${n} could not remove label ${action.label}:`, err);
-              }
-            }
-            if (action.type === "Relabel") {
-              try {
-                await withRetry(() => issues.addLabel(action.issueId, action.label), { label: `addLabel #${action.issueId}` });
-              } catch (err) {
-                console.error(`[${mode}] #${n} could not add label ${action.label}:`, err);
-              }
-            }
-            if (action.type === "StartReview") {
-              console.log(`[${mode}] #${n} → running AI review`);
-              let verdict: ReviewVerdict;
-              let reviewOutput: ReviewOutput | null = null;
-              try {
-                const ghIssue = await issues.get(n);
-                const diff = await issues.getPrDiff(n);
-                const result = await reviewer.runReview(
-                  {
-                    issueNumber: n,
-                    issueTitle: ghIssue.title,
-                    issueBody: ghIssue.body,
-                    branch: `agent/issue-${n}`,
-                    prNumber: n,
-                  },
-                  diff,
-                );
-                verdict = result.verdict;
-                reviewOutput = result.output;
-              } catch (err) {
-                // Fail-safe: any reviewer crash → changes-requested, never auto-merges.
-                console.warn(`[${mode}] #${n} reviewer failed — defaulting to changes-requested:`, err);
-                verdict = reviewVerdict(null);
-              }
-              console.log(`[${mode}] #${n} review verdict: ${verdict}`);
-
-              const reviewActions = reduce(finishState, {
-                type: "ReviewFinished",
-                issue: n,
-                pr: action.pr,
-                verdict,
-              });
-              for (const reviewAction of reviewActions) {
-                if (reviewAction.type === "RemoveLabel") {
-                  try {
-                    await issues.removeLabel(reviewAction.issueId, reviewAction.label);
-                  } catch (err) {
-                    console.error(`[${mode}] #${n} could not remove label ${reviewAction.label}:`, err);
-                  }
-                }
-                if (reviewAction.type === "EnableAutoMerge") {
-                  console.log(`[${mode}] #${n} review passed → enabling auto-merge`);
-                  try {
-                    await issues.enableAutoMerge(reviewAction.pr.issue);
-                  } catch (err) {
-                    console.error(`[${mode}] #${n} could not enable auto-merge:`, err);
-                  }
-                  // Terminal state (review passed — see ADR-0022 for why this,
-                  // not the later async PrMerged, is treated as the success point).
-                  await writeMemoryEntry(
-                    issues,
-                    buildOutcomeEntry({ issueNumber: n, prNumber: openedPr?.prNumber, attempts: history }),
-                  );
-                }
-                if (reviewAction.type === "WaitForHuman") {
-                  console.log(`[${mode}] #${n} review requested changes → parked for human`);
-                  if (reviewOutput) {
-                    try {
-                      await issues.postPrReview(n, reviewOutput);
-                    } catch (err) {
-                      console.error(`[${mode}] #${n} could not post PR review:`, err);
-                    }
-                  }
-                }
-              }
-            }
-            if (action.type === "WaitForHuman") {
-              console.log(`[${mode}] #${n} → PR open, waiting for human review`);
-            }
-          }
-        }
-      })();
+      background.push(yield* Effect.forkDetach(handleIssue(n, { ready, allPrs })));
     }
 
     // Sleep before the next reconciliation poll.
-    await new Promise<void>((r) => setTimeout(r, RECONCILE_INTERVAL));
+    yield* Effect.sleep(RECONCILE_INTERVAL);
   }
-}
+});
 
-async function processIssue(
+const processIssue = (
   n: number,
   issues: IssueSource,
   runner: SandboxRunner,
   base: string,
   repoRoot: string,
   mode: Mode,
-): Promise<(Pr & { prNumber?: number }) | null> {
-  const issue = await issues.get(n);
+): Effect.Effect<(Pr & { prNumber?: number }) | null, GhError | ShellError | SandboxError> =>
+  Effect.gen(function* () {
+    const issue = yield* issues.get(n);
 
-  // Claim: drop the ready label so the next tick won't re-pick this issue.
-  await issues.removeLabel(n, READY_LABEL);
-  console.log(`[${mode}] #${n} "${issue.title}" claimed → sandbox`);
+    // Claim: drop the ready label so the next tick won't re-pick this issue.
+    yield* issues.removeLabel(n, READY_LABEL);
+    console.log(`[${mode}] #${n} "${issue.title}" claimed → sandbox`);
 
-  // Refresh the base branch from origin so the sandbox branch is cut from the
-  // current origin/<base>, not a stale local HEAD that would conflict at merge
-  // time (#28). Runs before resetAgentBranch so the recreated branch is based
-  // on fresh origin.
-  await refreshBase(base, (args) => sh("git", args, { cwd: repoRoot }));
+    // Refresh the base branch from origin so the sandbox branch is cut from the
+    // current origin/<base>, not a stale local HEAD that would conflict at merge
+    // time (#28). Runs before resetAgentBranch so the recreated branch is based
+    // on fresh origin.
+    yield* refreshBaseEffect(base, (args) => sh("git", args, { cwd: repoRoot }));
 
-  // Delete any stale agent/issue-N branch (local + remote) left by a prior
-  // failed/partial run, so sandcastle branches from the current base instead
-  // of reusing a stale ref that would conflict at merge time (#23).
-  await resetAgentBranch(n, (args) => sh("git", args, { cwd: repoRoot }));
+    // Delete any stale agent/issue-N branch (local + remote) left by a prior
+    // failed/partial run, so sandcastle branches from the current base instead
+    // of reusing a stale ref that would conflict at merge time (#23).
+    yield* resetAgentBranchEffect(n, (args) => sh("git", args, { cwd: repoRoot }));
 
-  // Retrieve cross-run memory (ADR-0022) — repo conventions and gotchas
-  // surfaced by previous runs against this repo. Fails open to "no memory"
-  // internally; never blocks the sandbox from starting.
-  const memoryContext = await readMemoryContext(issues);
+    // Retrieve cross-run memory (ADR-0022) — repo conventions and gotchas
+    // surfaced by previous runs against this repo. Fails open to "no memory"
+    // internally; never blocks the sandbox from starting.
+    const memoryContext = yield* readMemoryContextEffect(issues);
 
-  const outcome = await runner.runIssue(issue, memoryContext);
-  console.log(
-    `[${mode}] #${n} sandbox done: branch=${outcome.branch} ` +
-      `commits=${outcome.commits.length} completed=${outcome.completed}` +
-      (outcome.logFilePath ? ` log=${outcome.logFilePath}` : ""),
-  );
-
-  // Optional agent-emitted enrichment (ADR-0022) — piggybacks on the same
-  // stdout already scanned for the completion signal, no extra agent turn.
-  for (const entry of parseMemoryTags(outcome.stdout)) {
-    await writeMemoryEntry(issues, entry);
-  }
-
-  if (outcome.commits.length === 0) {
-    return null;
-  }
-
-  // Orchestrator-side push (over the devcontainer's mounted SSH key) + PR.
-  await sh("git", ["push", "-u", "origin", outcome.branch], { cwd: repoRoot });
-  const shas = outcome.commits.map((c) => c.sha.slice(0, 7)).join(", ");
-  let prUrl: string;
-  try {
-    prUrl = await issues.openPr({
-      head: outcome.branch,
-      base,
-      title: `#${n}: ${issue.title}`,
-      body:
-        `Closes #${n}\n\n` +
-        `Implemented autonomously by the AFK orchestrator in an isolated, ` +
-        `git-isolated sandbox.\n\nCommits: ${shas}`,
-    });
-  } catch (err) {
-    // Branch is pushed but PR creation failed. Log the branch name so it can
-    // be recovered manually with: gh pr create --head <branch>
-    console.error(
-      `[${mode}] #${n} gh pr create failed — branch ${outcome.branch} is pushed but has no PR:`,
-      err,
+    const outcome = yield* runner.runIssue(issue, memoryContext);
+    console.log(
+      `[${mode}] #${n} sandbox done: branch=${outcome.branch} ` +
+        `commits=${outcome.commits.length} completed=${outcome.completed}` +
+        (outcome.logFilePath ? ` log=${outcome.logFilePath}` : ""),
     );
-    throw err;
-  }
-  await issues.comment(n, `Implemented in an isolated sandbox; opened ${prUrl}.`);
-  console.log(`[${mode}] #${n} → ${prUrl}`);
-  const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
-  return {
-    issue: n,
-    ciStatus: "pending",
-    merged: false,
-    prNumber: prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined,
-  };
-}
+
+    // Optional agent-emitted enrichment (ADR-0022) — piggybacks on the same
+    // stdout already scanned for the completion signal, no extra agent turn.
+    for (const entry of parseMemoryTags(outcome.stdout)) {
+      yield* writeMemoryEntryEffect(issues, entry);
+    }
+
+    if (outcome.commits.length === 0) {
+      return null;
+    }
+
+    // Orchestrator-side push (over the devcontainer's mounted SSH key) + PR.
+    yield* Effect.tryPromise({
+      try: () => sh("git", ["push", "-u", "origin", outcome.branch], { cwd: repoRoot }),
+      catch: (cause) => new ShellError({ command: `git push -u origin ${outcome.branch}`, cause }),
+    });
+    const shas = outcome.commits.map((c) => c.sha.slice(0, 7)).join(", ");
+    const prUrl = yield* issues
+      .openPr({
+        head: outcome.branch,
+        base,
+        title: `#${n}: ${issue.title}`,
+        body:
+          `Closes #${n}\n\n` +
+          `Implemented autonomously by the AFK orchestrator in an isolated, ` +
+          `git-isolated sandbox.\n\nCommits: ${shas}`,
+      })
+      .pipe(
+        // Branch is pushed but PR creation failed. Log the branch name so it can
+        // be recovered manually with: gh pr create --head <branch>
+        Effect.tapError((err) =>
+          Effect.sync(() =>
+            console.error(
+              `[${mode}] #${n} gh pr create failed — branch ${outcome.branch} is pushed but has no PR:`,
+              causeOf(err),
+            ),
+          ),
+        ),
+      );
+    yield* issues.comment(n, `Implemented in an isolated sandbox; opened ${prUrl}.`);
+    console.log(`[${mode}] #${n} → ${prUrl}`);
+    const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
+    return {
+      issue: n,
+      ciStatus: "pending" as const,
+      merged: false,
+      prNumber: prNumberMatch ? parseInt(prNumberMatch[1], 10) : undefined,
+    };
+  });
 
 // Run only when executed directly; not when imported (e.g., in tests).
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main();
+  // Run as a root fiber so SIGINT/SIGTERM interrupt it: acquire/release
+  // finalizers (sandbox close, worktree cleanup) then run instead of being
+  // skipped by an abrupt process exit.
+  const fiber = Effect.runFork(main);
+  let signal: NodeJS.Signals | undefined;
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.once(sig, () => {
+      signal = sig;
+      void Effect.runPromise(Fiber.interrupt(fiber));
+    });
+  }
+  try {
+    await Effect.runPromise(Fiber.join(fiber));
+  } catch (err) {
+    if (!signal) throw err;
+    console.log(`[afk] ${signal} received — interrupted, resources released.`);
+    process.exitCode = signal === "SIGINT" ? 130 : 143;
+  }
 }

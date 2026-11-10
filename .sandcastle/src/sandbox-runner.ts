@@ -29,7 +29,9 @@ import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { getCompressionCallback, isCompressionActive } from "./context-compressor.js";
 import { fileURLToPath } from "node:url";
-import { withRetry } from "./retry.ts";
+import { Effect } from "effect";
+import { retryEffect } from "./retry.ts";
+import { SandboxError } from "./errors.ts";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 
@@ -243,78 +245,97 @@ export function buildAgentInput(
 export class SandboxRunner {
   constructor(private readonly opts: RunnerOptions = {}) {}
 
-  async runIssue(issue: IssueInput, memoryContext?: string): Promise<SandboxOutcome> {
+  /**
+   * Run one issue in a fresh sandbox. The sandbox is an acquire/release
+   * resource (ADR-0019): `close()` fires on success, failure and interruption
+   * alike, so the worktree/container never leaks.
+   */
+  runIssue(issue: IssueInput, memoryContext?: string): Effect.Effect<SandboxOutcome, SandboxError> {
+    const opts = this.opts;
     const branch = `agent/issue-${issue.number}`;
-    const agentInput = buildAgentInput(this.opts, issue, memoryContext);
+    const agentInput = buildAgentInput(opts, issue, memoryContext);
 
-    // createSandbox owns worktree creation and teardown (ADR-0019); `await
-    // using` ensures close() fires even if sandbox.run() throws, replacing the
-    // old bespoke try/finally lifecycle.
-    await using sandbox = await createSandbox({
-      branch,
-      sandbox: docker({
-        imageName: agentInput.imageName,
-        containerUid: this.opts.containerUid ?? 1000,
-        containerGid: this.opts.containerGid ?? 1000,
-        ...(agentInput.network ? { network: agentInput.network } : {}),
-        ...(agentInput.sandboxEnv ? { env: agentInput.sandboxEnv } : {}),
-      }),
-      cwd: this.opts.cwd,
-      copyToWorktree: agentInput.copyToWorktree,
-      hooks: agentInput.onSandboxReady
-        ? { sandbox: { onSandboxReady: agentInput.onSandboxReady } }
-        : undefined,
+    const acquire = Effect.tryPromise({
+      try: () =>
+        createSandbox({
+          branch,
+          sandbox: docker({
+            imageName: agentInput.imageName,
+            containerUid: opts.containerUid ?? 1000,
+            containerGid: opts.containerGid ?? 1000,
+            ...(agentInput.network ? { network: agentInput.network } : {}),
+            ...(agentInput.sandboxEnv ? { env: agentInput.sandboxEnv } : {}),
+          }),
+          cwd: opts.cwd,
+          copyToWorktree: agentInput.copyToWorktree,
+          hooks: agentInput.onSandboxReady
+            ? { sandbox: { onSandboxReady: agentInput.onSandboxReady } }
+            : undefined,
+        }),
+      catch: (cause) => new SandboxError({ op: "createSandbox", cause }),
     });
+    const sandboxResource = Effect.acquireRelease(acquire, (sandbox) =>
+      Effect.promise(() => sandbox.close()).pipe(Effect.ignore),
+    );
 
-    // Resolve compression callback once (off by default — set HEADROOM_MODE=conservative or
-    // aggressive to enable). Claude tier only: the local/Ollama tier has no token cost to save,
-    // so compressing there would only add latency for no benefit.
-    const compression = this.opts.tier === "local" ? undefined : getCompressionCallback();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const sandbox = yield* sandboxResource;
 
-    let runResult;
-    if (compression) {
-      // Pre-read template, resolve args, compress — outside sandcastle's Effect generators.
-      const raw = await readFile(agentInput.promptFile, "utf8");
-      let text = raw;
+        // Resolve compression callback once (off by default — set HEADROOM_MODE=conservative or
+        // aggressive to enable). Claude tier only: the local/Ollama tier has no token cost to save,
+        // so compressing there would only add latency for no benefit.
+        const compression = opts.tier === "local" ? undefined : getCompressionCallback();
+
+        // With compression: pre-read the template, resolve args, compress, and pass an
+        // inline prompt. Without: let sandcastle read the template itself.
+        const promptInput = compression
+          ? { prompt: yield* compressedPrompt(agentInput, compression) }
+          : { promptFile: agentInput.promptFile, promptArgs: agentInput.promptArgs };
+
+        const turn = Effect.tryPromise({
+          try: () =>
+            sandbox.run({
+              agent: agentInput.agent,
+              name: `issue-${issue.number}`,
+              maxIterations: opts.maxIterations ?? 12,
+              completionSignal: COMPLETION_SIGNAL,
+              ...promptInput,
+            }),
+          catch: (e) => e,
+        });
+        const result = yield* retryEffect(turn, {
+          maxAttempts: 2,
+          baseDelayMs: 5_000,
+          label: `issue-${issue.number} agent turn`,
+          shouldRetry: isTransientAgentError,
+        }).pipe(Effect.mapError((cause) => new SandboxError({ op: "agent turn", cause })));
+
+        return {
+          branch: sandbox.branch,
+          commits: result.commits,
+          completed: result.completionSignal !== undefined,
+          logFilePath: result.logFilePath,
+          stdout: result.stdout,
+        } satisfies SandboxOutcome;
+      }),
+    );
+  }
+}
+
+/** Read the prompt template, substitute {{KEY}} args, and run it through `compression`. */
+function compressedPrompt(
+  agentInput: AgentInput,
+  compression: (prompt: string) => Promise<string>,
+): Effect.Effect<string, SandboxError> {
+  return Effect.tryPromise({
+    try: async () => {
+      let text = await readFile(agentInput.promptFile, "utf8");
       for (const [key, value] of Object.entries(agentInput.promptArgs)) {
         text = text.replaceAll(`{{${key}}}`, String(value));
       }
-      const compressed = await compression(text);
-
-      runResult = await withRetry(
-        () =>
-          sandbox.run({
-            agent: agentInput.agent,
-            name: `issue-${issue.number}`,
-            maxIterations: this.opts.maxIterations ?? 12,
-            completionSignal: COMPLETION_SIGNAL,
-            prompt: compressed,
-          }),
-        { maxAttempts: 2, baseDelayMs: 5_000, label: `issue-${issue.number} agent turn`, shouldRetry: isTransientAgentError },
-      );
-    } else {
-      runResult = await withRetry(
-        () =>
-          sandbox.run({
-            agent: agentInput.agent,
-            name: `issue-${issue.number}`,
-            maxIterations: this.opts.maxIterations ?? 12,
-            completionSignal: COMPLETION_SIGNAL,
-            promptFile: agentInput.promptFile,
-            promptArgs: agentInput.promptArgs,
-          }),
-        { maxAttempts: 2, baseDelayMs: 5_000, label: `issue-${issue.number} agent turn`, shouldRetry: isTransientAgentError },
-      );
-    }
-
-    const result = runResult;
-
-    return {
-      branch: sandbox.branch,
-      commits: result.commits,
-      completed: result.completionSignal !== undefined,
-      logFilePath: result.logFilePath,
-      stdout: result.stdout,
-    };
-  }
+      return compression(text);
+    },
+    catch: (cause) => new SandboxError({ op: "compress prompt", cause }),
+  });
 }

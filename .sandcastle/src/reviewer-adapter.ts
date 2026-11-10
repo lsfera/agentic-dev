@@ -16,6 +16,7 @@
  *
  * Prior art: mattpocock/sandcastle agent-workflows/review/ pattern (ADR-0020).
  */
+import { Effect } from "effect";
 import { run, claudeCode, Output, StructuredOutputError } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { dirname, join } from "node:path";
@@ -198,104 +199,100 @@ export class ReviewerAdapter {
   /**
    * Run the reviewer on the given PR branch and return the validated structured
    * output, or null when extraction/validation fails (caller maps to
-   * "changes-requested" via reviewVerdict()).
+   * "changes-requested" via reviewVerdict()). Never fails: every failure is
+   * logged and mapped to null (fail-safe).
    */
-  async review(input: ReviewInput): Promise<ReviewOutput | null> {
+  review(input: ReviewInput): Effect.Effect<ReviewOutput | null> {
     const model = this.opts.model ?? "claude-sonnet-4-6";
     const cwd = this.opts.cwd;
-
     const passOneConfig = buildReviewerPassOneConfig(this.opts, input);
+    const passTwoConfig = buildReviewerPassTwoConfig(input);
     const compression = getCompressionCallback();
+    const agent = () => claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV });
+    const outputSpec = () => Output.object({ tag: "output", schema: reviewOutputSchema });
 
-    // Pass 1: produce — the reviewer reads the diff and forms a free-form review.
-    let reviewResult;
-    try {
-      // Pre-read template, resolve args, optionally compress — outside sandcastle's Effect generators.
-      if (compression) {
-        const raw = await readFile(join(_dir, "..", "prompts", "review-prompt.md"), "utf8");
-        let text = raw;
-        for (const [key, value] of Object.entries(passOneConfig.promptArgs)) {
+    /** Fill a prompt template's {{KEY}} args, then compress it. */
+    const compressTemplate = (file: string, args: Record<string, string> = {}) =>
+      Effect.tryPromise(async () => {
+        let text = await readFile(file, "utf8");
+        for (const [key, value] of Object.entries(args)) {
           text = text.replaceAll(`{{${key}}}`, String(value));
         }
-        const compressed = await compression(text);
+        return compression!(text);
+      });
 
-        reviewResult = await run({
-          agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
-          sandbox: noSandbox(),
-          cwd,
-          prompt: compressed,
-          name: passOneConfig.name,
-          maxIterations: passOneConfig.maxIterations,
-        });
-      } else {
-        reviewResult = await run({
-          agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
-          sandbox: noSandbox(),
-          cwd,
-          ...passOneConfig,
-        });
+    // Pass 1: produce — the reviewer reads the diff and forms a free-form review.
+    const passOne = Effect.gen(function* () {
+      if (compression) {
+        const prompt = yield* compressTemplate(passOneConfig.promptFile, passOneConfig.promptArgs);
+        return yield* Effect.tryPromise(() =>
+          run({
+            agent: agent(),
+            sandbox: noSandbox(),
+            cwd,
+            prompt,
+            name: passOneConfig.name,
+            maxIterations: passOneConfig.maxIterations,
+          }),
+        );
       }
-    } catch (err) {
-      console.warn(`[reviewer] pass-1 (produce) failed for #${input.issueNumber}:`, err);
-      return null;
-    }
-
-    const passTwoConfig = buildReviewerPassTwoConfig(input);
-
-    if (!reviewResult.resume) {
-      console.warn(`[reviewer] resume not available after pass-1 for #${input.issueNumber} — using fresh run for extraction`);
-    }
+      return yield* Effect.tryPromise(() =>
+        run({ agent: agent(), sandbox: noSandbox(), cwd, ...passOneConfig }),
+      );
+    });
 
     // Pass 2: extract — resume the session and ask for the structured output block.
-    try {
-      let extractResult;
-      if (compression) {
-        const raw = await loadPromptFile(passTwoConfig.promptFile);
-        const compressed = await compression(raw);
-
-        extractResult = reviewResult.resume
-          ? await reviewResult.resume(compressed, {
-              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-              cwd,
+    const passTwo = (reviewResult: Effect.Success<typeof passOne>) =>
+      Effect.gen(function* () {
+        if (!reviewResult.resume) {
+          console.warn(`[reviewer] resume not available after pass-1 for #${input.issueNumber} — using fresh run for extraction`);
+        }
+        const extractResult = compression
+          ? yield* Effect.gen(function* () {
+              const prompt = yield* compressTemplate(passTwoConfig.promptFile);
+              return yield* Effect.tryPromise(() =>
+                reviewResult.resume
+                  ? reviewResult.resume(prompt, { output: outputSpec(), cwd })
+                  : run({ agent: agent(), sandbox: noSandbox(), cwd, prompt, output: outputSpec(), name: passTwoConfig.name }),
+              );
             })
-          : await run({
-              agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
-              sandbox: noSandbox(),
-              cwd,
-              prompt: compressed,
-              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-              name: passTwoConfig.name,
-            });
-      } else {
-        extractResult = reviewResult.resume
-          ? await reviewResult.resume(
-              await loadPromptFile(join(_dir, "..", "prompts", "review-extraction.md")),
-              {
-                output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-                cwd,
-              },
-            )
-          : await run({
-              agent: claudeCode(model, { permissionMode: "auto", env: FORCE_OAUTH_ENV }),
-              sandbox: noSandbox(),
-              cwd,
-              promptFile: passTwoConfig.promptFile,
-              output: Output.object({ tag: "output", schema: reviewOutputSchema }),
-              name: passTwoConfig.name,
-            });
-      }
+          : yield* Effect.tryPromise(async () =>
+              reviewResult.resume
+                ? reviewResult.resume(await loadPromptFile(passTwoConfig.promptFile), { output: outputSpec(), cwd })
+                : run({
+                    agent: agent(),
+                    sandbox: noSandbox(),
+                    cwd,
+                    promptFile: passTwoConfig.promptFile,
+                    output: outputSpec(),
+                    name: passTwoConfig.name,
+                  }),
+            );
+        return (extractResult as typeof extractResult & { output: ReviewOutput }).output;
+      });
 
-      return (extractResult as typeof extractResult & { output: ReviewOutput }).output;
-    } catch (err) {
-      if (err instanceof StructuredOutputError) {
-        console.warn(
-          `[reviewer] structured output extraction failed for #${input.issueNumber}: ${err.message}`,
-        );
-      } else {
-        console.warn(`[reviewer] pass-2 (extract) failed for #${input.issueNumber}:`, err);
-      }
-      return null;
-    }
+    return passOne.pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => console.warn(`[reviewer] pass-1 (produce) failed for #${input.issueNumber}:`, err.cause ?? err)).pipe(
+          Effect.andThen(Effect.fail(null)),
+        ),
+      ),
+      Effect.flatMap((reviewResult) =>
+        passTwo(reviewResult).pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              const cause = err.cause;
+              if (cause instanceof StructuredOutputError) {
+                console.warn(`[reviewer] structured output extraction failed for #${input.issueNumber}: ${cause.message}`);
+              } else {
+                console.warn(`[reviewer] pass-2 (extract) failed for #${input.issueNumber}:`, cause ?? err);
+              }
+            }).pipe(Effect.andThen(Effect.fail(null))),
+          ),
+        ),
+      ),
+      Effect.catch(() => Effect.succeed(null)),
+    );
   }
 
   /**
@@ -303,24 +300,27 @@ export class ReviewerAdapter {
    * diff-only lines, and return the verdict. On any failure, returns
    * "changes-requested" (fail-safe).
    */
-  async runReview(input: ReviewInput, diff: string): Promise<{ verdict: ReviewVerdict; output: ReviewOutput | null }> {
-    const raw = await this.review(input);
-    const verdict = reviewVerdict(raw instanceof Error ? raw : raw);
-
-    if (raw && raw.comments.length > 0) {
-      const diffLines = parseDiffLines(diff);
-      const filtered: ReviewOutput = {
-        ...raw,
-        comments: filterInlineComments(raw.comments, diffLines),
-      };
-      return { verdict, output: filtered };
-    }
-
-    return { verdict, output: raw };
+  runReview(
+    input: ReviewInput,
+    diff: string,
+  ): Effect.Effect<{ verdict: ReviewVerdict; output: ReviewOutput | null }> {
+    return this.review(input).pipe(
+      Effect.map((raw) => {
+        const verdict = reviewVerdict(raw);
+        if (raw && raw.comments.length > 0) {
+          const diffLines = parseDiffLines(diff);
+          const filtered: ReviewOutput = {
+            ...raw,
+            comments: filterInlineComments(raw.comments, diffLines),
+          };
+          return { verdict, output: filtered };
+        }
+        return { verdict, output: raw };
+      }),
+    );
   }
 }
 
-async function loadPromptFile(path: string): Promise<string> {
-  const { readFile } = await import("node:fs/promises");
+function loadPromptFile(path: string): Promise<string> {
   return readFile(path, "utf8");
 }

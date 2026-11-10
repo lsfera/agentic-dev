@@ -16,6 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Effect } from "effect";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { ReviewerAdapter } from "./reviewer-adapter.ts";
 
@@ -38,13 +39,13 @@ test(
       maxIterations: 4,
     });
 
-    const outcome = await runner.runIssue({
+    const outcome = await Effect.runPromise(runner.runIssue({
       number: 999,
       title: "integration smoke",
       body:
         "Append exactly one line reading 'integration-smoke-ok' to README.md, " +
         "then commit it. Do not modify any other file.",
-    });
+    }));
 
     assert.equal(outcome.branch, "agent/issue-999");
     assert.ok(
@@ -76,13 +77,13 @@ test(
   async () => {
     // Use the review-gate PR branch as the target — it has real code changes.
     const reviewer = new ReviewerAdapter({ cwd: repoRoot });
-    const result = await reviewer.review({
+    const result = await Effect.runPromise(reviewer.review({
       issueNumber: 82,
       issueTitle: "AI review gate non-functional: pass-2 extraction crashes",
       issueBody: "The AI review gate never produces a real verdict because the extraction pass crashes deterministically.",
       branch: "agent/issue-82-review-gate",
       prNumber: 85,
-    });
+    }));
 
     // A genuine review should return the validated ReviewOutput (not null). The
     // verdict itself is real judgment on the branch's diff and may legitimately

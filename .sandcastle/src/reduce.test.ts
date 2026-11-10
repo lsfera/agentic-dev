@@ -716,35 +716,35 @@ test("refreshBase: a fetch failure is retried, then swallowed without crashing",
 const sigFor = (secret: string, raw: string) =>
   `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
 
-test("classifyDelivery: no secret configured → no-secret", () => {
-  assert.equal(classifyDelivery(undefined, "{}", "sha256=whatever"), "no-secret");
+test("classifyDelivery: no secret configured → no-secret", async () => {
+  assert.equal(await classifyDelivery(undefined, "{}", "sha256=whatever"), "no-secret");
 });
 
-test("classifyDelivery: secret set but no signature header → missing-signature", () => {
-  assert.equal(classifyDelivery("s", "{}", undefined), "missing-signature");
+test("classifyDelivery: secret set but no signature header → missing-signature", async () => {
+  assert.equal(await classifyDelivery("s", "{}", undefined), "missing-signature");
 });
 
-test("classifyDelivery: matching signature → verified", () => {
+test("classifyDelivery: matching signature → verified", async () => {
   const raw = '{"action":"closed"}';
-  assert.equal(classifyDelivery("s", raw, sigFor("s", raw)), "verified");
+  assert.equal(await classifyDelivery("s", raw, sigFor("s", raw)), "verified");
 });
 
-test("classifyDelivery: wrong signature → mismatch (but caller still proceeds)", () => {
-  assert.equal(classifyDelivery("s", '{"action":"closed"}', sigFor("s", "tampered")), "mismatch");
+test("classifyDelivery: wrong signature → mismatch (but caller still proceeds)", async () => {
+  assert.equal(await classifyDelivery("s", '{"action":"closed"}', sigFor("s", "tampered")), "mismatch");
 });
 
-test("classifyDelivery: smee number reformatting yields mismatch on a genuine body", () => {
+test("classifyDelivery: smee number reformatting yields mismatch on a genuine body", async () => {
   // GitHub signs the raw bytes; smee re-serializes the parsed body, reformatting
   // numbers (1.0→1). The verdict is 'mismatch' even though the delivery is real
   // — this is exactly why the check is advisory, not a gate (#26).
   const rawFromGitHub = '{"id":1.0}';
   const reserialized = JSON.stringify(JSON.parse(rawFromGitHub)); // "{\"id\":1}"
   assert.notEqual(rawFromGitHub, reserialized);
-  assert.equal(classifyDelivery("s", reserialized, sigFor("s", rawFromGitHub)), "mismatch");
+  assert.equal(await classifyDelivery("s", reserialized, sigFor("s", rawFromGitHub)), "mismatch");
 });
 
-test("validateSignature: rejects a signature of the wrong length without throwing", () => {
-  assert.equal(validateSignature("s", "{}", "sha256=short"), false);
+test("validateSignature: rejects a signature of the wrong length without throwing", async () => {
+  assert.equal(await validateSignature("s", "{}", "sha256=short"), false);
 });
 
 test("parseSmeeEvent: reads headers from smee's TOP-LEVEL keys (real shape, #26)", () => {
@@ -1122,4 +1122,13 @@ test("reconcileFromLabels: merged PR does not count as open PR for in-review", (
   assert.deepEqual(reconcileFromLabels(issues, [mergedPr]), [
     { type: "RemoveLabel", issueId: 1, label: IN_REVIEW_LABEL },
   ]);
+});
+
+test("validateSignature: accepts a correct signature (Effect Mac agrees with node:crypto)", async () => {
+  assert.equal(await validateSignature("s", '{"a":1}', sigFor("s", '{"a":1}')), true);
+});
+
+test("validateSignature: rejects non-hex / wrong-prefix signatures of the right length", async () => {
+  assert.equal(await validateSignature("s", "{}", `sha256=${"z".repeat(64)}`), false);
+  assert.equal(await validateSignature("s", "{}", `sha1=${"0".repeat(64)}`), false);
 });
