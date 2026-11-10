@@ -5,15 +5,13 @@
   "license": "MIT",
   "description": "Sandcastle-based /afk orchestrator: works each ready-for-agent issue in its own disposable, git-isolated sandbox and opens a PR per issue.",
   "scripts": {
-    "postinstall": "patch-package",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/reduce.test.ts src/sandbox-runner.test.ts src/reviewer-adapter.test.ts src/memory.test.ts src/memory-store.test.ts src/run-sh.test.ts src/init-sh.test.ts src/up-sh.test.ts src/afk-cmd.test.ts src/context-compressor.test.ts src/retry.test.ts src/issue-source.test.ts src/main-loop.test.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "test:integration": "SANDCASTLE_INTEGRATION=1 node --import tsx --test src/integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
-    "patch-package": "^8.0.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },

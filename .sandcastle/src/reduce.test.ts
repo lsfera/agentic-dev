@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reduce, READY_LABEL, IN_PROGRESS_LABEL, IN_REVIEW_LABEL, reviewVerdict, reconcileFromLabels, type State, type CiStatus, type Pr, type ReviewOutput } from "./reduce.ts";
 import { parseBlockedBy, formatReviewAsComment } from "./issue-source.ts";
-import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, parseOrchEnv, resolveCredentials, resolveRunMode, resolveDockerHost } from "./main.ts";
+import { sweepOrphanedSandboxes, ensureSandboxNetwork, parseConcurrency, resetAgentBranch, refreshBase, validateSignature, classifyDelivery, parseSmeeEvent, shouldProcessDelivery, parseOrchEnv, resolveCredentials, resolveRunMode, resolveDockerHost } from "./main.ts";
 import { createHmac } from "node:crypto";
 import { SANDBOX_LABEL, PROJECT_LABEL_KEY, deriveProject } from "./sandbox-runner.ts";
 
@@ -495,7 +495,7 @@ test("sweepOrphanedSandboxes: docker error → returns 0 without throwing", asyn
 
 test("sweepOrphanedSandboxes: docker ps uses SANDBOX_LABEL as the filter", async () => {
   let psArgs: string[] = [];
-  const exec = (file: string, args: string[]) => {
+  const exec = (_file: string, args: string[]) => {
     if (args[0] === "ps") psArgs = args;
     return Promise.resolve({ stdout: "" });
   };
@@ -521,7 +521,7 @@ test("deriveProject: 'owner/name' → name; bare name → name; falls back to cw
 
 test("sweepOrphanedSandboxes: project requests the project label in the ps format", async () => {
   let psArgs: string[] = [];
-  const exec = (file: string, args: string[]) => {
+  const exec = (_file: string, args: string[]) => {
     if (args[0] === "ps") psArgs = args;
     return Promise.resolve({ stdout: "" });
   };
@@ -1131,4 +1131,17 @@ test("validateSignature: accepts a correct signature (Effect Mac agrees with nod
 test("validateSignature: rejects non-hex / wrong-prefix signatures of the right length", async () => {
   assert.equal(await validateSignature("s", "{}", `sha256=${"z".repeat(64)}`), false);
   assert.equal(await validateSignature("s", "{}", `sha1=${"0".repeat(64)}`), false);
+});
+
+test("shouldProcessDelivery: advisory mode processes every verdict", () => {
+  for (const v of ["verified", "mismatch", "missing-signature", "no-secret"] as const) {
+    assert.equal(shouldProcessDelivery(v, false), true);
+  }
+});
+
+test("shouldProcessDelivery: strict mode requires a verified signature", () => {
+  assert.equal(shouldProcessDelivery("verified", true), true);
+  for (const v of ["mismatch", "missing-signature", "no-secret"] as const) {
+    assert.equal(shouldProcessDelivery(v, true), false);
+  }
 });

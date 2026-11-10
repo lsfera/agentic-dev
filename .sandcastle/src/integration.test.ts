@@ -14,13 +14,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolve, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { Effect } from "effect";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { ReviewerAdapter } from "./reviewer-adapter.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const enabled = !!process.env.SANDCASTLE_INTEGRATION;
 
 // The repo root is the grandparent of this `.sandcastle/src/` dir. Anchor sandcastle's
