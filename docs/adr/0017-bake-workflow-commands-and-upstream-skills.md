@@ -1,6 +1,6 @@
 # Bake the workflow commands and upstream skills into the outer image
 
-**Status:** Accepted.
+**Status:** Accepted. The upstream-skills half is superseded by [ADR-0029](0029-upstream-skills-via-claude-plugin.md) (installed as a Claude Code plugin).
 
 ADR-0016 bakes the orchestrator *source* into the outer image, so an adopter
 doesn't vendor `.sandcastle/*.ts`. But the **workflow** the orchestrator drives —

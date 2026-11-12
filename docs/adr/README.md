@@ -29,6 +29,7 @@ Records that were fully absorbed by a successor are removed (history is in git):
 | [0021](0021-durable-agent-lifecycle-labels.md) | Durable agent lifecycle labels | Accepted. |
 | [0022](0022-cross-run-agent-memory.md) | Cross-run agent memory | Accepted. |
 | [0028](0028-effect-4-orchestrator.md) | The orchestrator is built on Effect 4 | Accepted. Supersedes the async/await style of ADR-0005/0019. |
+| [0029](0029-upstream-skills-via-claude-plugin.md) | Install upstream skills as a Claude Code plugin, not a build-time clone | Accepted. Supersedes the skills half of ADR-0017. |
 
 ## Devcontainer and images
 
@@ -40,7 +41,7 @@ Records that were fully absorbed by a successor are removed (history is in git):
 | [0014](0014-prebuilt-ghcr-sandbox-images.md) | Publish prebuilt inner sandbox images to GHCR | Accepted. |
 | [0015](0015-prebuilt-outer-orchestrator-image.md) | Publish the prebuilt outer orchestrator image to GHCR | Accepted. |
 | [0016](0016-bake-orchestrator-into-outer-image.md) | Bake the orchestrator into the outer image | Accepted. |
-| [0017](0017-bake-workflow-commands-and-upstream-skills.md) | Bake the workflow commands and upstream skills into the outer image | Accepted. |
+| [0017](0017-bake-workflow-commands-and-upstream-skills.md) | Bake the workflow commands and upstream skills into the outer image | Accepted; skills half superseded by 0029. |
 | [0018](0018-cockpit-mode-drive-from-inside-the-outer-image.md) | Cockpit mode — drive the workflow from inside the outer image | Accepted. |
 | [0027](0027-sandcastle-directory-layout.md) | `.sandcastle/` is organised into `src/`, `docker/` and `prompts/` | Accepted. |
 

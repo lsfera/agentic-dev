@@ -19,7 +19,7 @@ usage are in the [README](../README.md); the agent operating contract is
 
 - **Self-contained per project**: each project holds its own `.devcontainer/`; the container is named per project (`DEVCONTAINER_NAME`) (ADR-0012).
 - **Path-matched mount**: the workspace is also bind-mounted at its absolute host path and the orchestrator runs from there, so sandcastle worktrees resolve correctly for sibling containers (ADR-0011).
-- **Published image** (`ghcr.io/lsfera/agentic-dev/devcontainer`) bakes the orchestrator, workflow slash commands and four upstream skills; the compose file boots standalone with fallbacks for every variable (ADR-0015, 0016, 0017).
+- **Published image** (`ghcr.io/lsfera/agentic-dev/devcontainer`) bakes the orchestrator, workflow slash commands (upstream skills install as a Claude plugin, ADR-0029); the compose file boots standalone with fallbacks for every variable (ADR-0015, 0016, 0017).
 - **Git auth** uses the host ssh-agent socket, not a `~/.ssh` mount (ADR-0026).
 - **Claude state** persists on the host in `~/.devcontainer-claude/`.
 

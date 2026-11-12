@@ -61,7 +61,7 @@ There are two ways to drive the workflow; both use the same slash commands, and 
 | **Cockpit** (needs no host Claude or docker MCP) | Inside the devcontainer | `docker compose -f .devcontainer/docker-compose.yml exec -it devcontainer cockpit` — see [Cockpit mode](#cockpit-mode) |
 
 - **GitHub issues are the durable state.** The container is disposable; progress lives in issues, not in local files.
-- **The image bakes the workflow in.** The published devcontainer installs the slash commands → `~/.claude/commands` and engineering disciplines → `~/.claude/skills` ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)). This is what cockpit mode relies on; host-driven mode uses the workspace `.claude/commands` and needs the docker MCP wiring (see [Sandbox wiring](#sandbox-wiring)).
+- **The image bakes the workflow in.** The published devcontainer installs the slash commands → `~/.claude/commands` and engineering-discipline skills plugin ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)). This is what cockpit mode relies on; host-driven mode uses the workspace `.claude/commands` and needs the docker MCP wiring (see [Sandbox wiring](#sandbox-wiring)).
 - **Terminology** (see [CONTEXT.md](CONTEXT.md)): the *outer devcontainer* is where you and the orchestrator work; an *agentic sandbox* is a disposable inner container per unit of work. Below, "sandbox" without qualification means the outer devcontainer when talking about `/exec`/`up.sh`, and the inner container under [Inner sandbox images](#inner-sandbox-images).
 
 ## Cockpit mode
@@ -193,14 +193,14 @@ Supporting commands:
 | `down.sh` | Tear down sandboxes from this repo, scoped by label (`./down.sh [folder]`). |
 | `code.sh` | Optional: attach VS Code to a running sandbox at its workspace folder. |
 | `.devcontainer/init.sh` | Host `initializeCommand`: derives the per-project `DEVCONTAINER_NAME`, writes `.devcontainer/.env` and pre-creates the persist dir. Optional — the compose fallbacks cover a bare `docker compose up`. `--dry-run` prints the resolved names without side effects. |
-| `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup` and the `afk`/`hitl` launchers. When built for publishing (`BAKE_ORCHESTRATOR=1`) it also bakes the orchestrator source + workflow commands + upstream skills (ADR-0016/0017). |
+| `.devcontainer/Dockerfile` | Ubuntu 24.04 devcontainer base; bakes in `claude-persist-setup` and the `afk`/`hitl` launchers. When built for publishing (`BAKE_ORCHESTRATOR=1`) it also bakes the orchestrator source + workflow commands (ADR-0016/0017). |
 | `.devcontainer/docker-compose.yml` | Service `devcontainer` — the sandbox target, `container_name: ${DEVCONTAINER_NAME}`. Mounts workspace (`consistency: cached`), host ssh-agent socket (ADR-0026), Claude persist dir, Docker socket. Every var has a fallback, so it boots standalone without `init.sh`. |
 | `.devcontainer/devcontainer.json` | `claude-code` + `docker-outside-of-docker` features; in-project `initializeCommand` → `init.sh`; `postCreateCommand` → `claude-persist-setup`. |
 | `.devcontainer/cockpit` | Launches Claude Code at the workspace root for [cockpit mode](#cockpit-mode) (ADR-0018). |
 | `.devcontainer/cockpit-settings.json` | Global `~/.claude/settings.json` baked into the image (pre-allows `gh`, `git`, `afk`, `hitl`). |
 | `.devcontainer/afk` | Baked as `afk` (and `hitl` symlink): resolves the project root and launches `.sandcastle/run.sh`. |
 | `.devcontainer/devcontainer.build.json` | Build-only, dockerfile-based config used by CI to publish the multi-arch outer image (ADR-0015); must mirror `devcontainer.json`'s Dockerfile + features. |
-| `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount; installs the baked workflow commands → `~/.claude/commands` and upstream skills → `~/.claude/skills`. |
+| `.devcontainer/claude-persist-setup` | Symlinks `~/.claude.json` + `~/.claude/` into the persist mount; installs the baked workflow commands → `~/.claude/commands` and installs the upstream skills plugin (ADR-0029). |
 
 ### Sandbox
 
@@ -283,11 +283,14 @@ otherwise; deps install into `/opt` on first use. Override the baked location wi
 
 It also bakes the **workflow itself** ([ADR-0017](docs/adr/0017-bake-workflow-commands-and-upstream-skills.md)):
 the user-invoked slash commands (`/afk`, `/hitl`, `/exec`, `/to-prd`, `/to-issues`,
-`/tdd`, `/grill-me-with-docs`) at `/opt/agentic-commands`, plus four model-invoked
-engineering disciplines (`tdd`, `diagnosing-bugs`, `domain-modeling`, `codebase-design`)
-pulled from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT) at
-`/opt/agentic-skills`. At container creation `claude-persist-setup` installs them into
-`~/.claude/commands` and `~/.claude/skills`. This is **groundwork** for running the
+`/tdd`, `/grill-me-with-docs`) at `/opt/agentic-commands`. At container creation
+`claude-persist-setup` installs them into `~/.claude/commands`, and installs the
+model-invoked engineering disciplines via the
+`mattpocock-skills@claude-plugins-official` plugin
+([mattpocock/skills](https://github.com/mattpocock/skills), MIT;
+[ADR-0029](docs/adr/0029-upstream-skills-via-claude-plugin.md)). The plugin install is
+best-effort (needs network); set `AGENTIC_SKILLS_PLUGIN=` (empty) to skip it, or to another
+`plugin@marketplace` id to use a different one. This is **groundwork** for running the
 workflow from *inside* the container — the current flow runs Claude on the host (see
 [How it fits together](#how-it-fits-together)), which uses the workspace
 `.claude/commands`, so the baked copies are inert for the host flow today.
@@ -442,4 +445,4 @@ Add `mcp__docker__run_command` to the `allow` list in `.claude/settings.local.js
 
 The orchestrator under `.sandcastle/` is built on **[sandcastle](https://github.com/mattpocock/sandcastle)** by [Matt Pocock](https://github.com/mattpocock) — a TypeScript library for orchestrating sandboxed coding agents (`sandcastle.run()`, published as [`@ai-hero/sandcastle`](https://www.npmjs.com/package/@ai-hero/sandcastle)). It handles the disposable, git-isolated Docker sandbox each agent runs in; this project wraps it into the issue-driven `/afk` and `/hitl` workflow. Thanks to Matt and the sandcastle contributors.
 
-The published image also bakes a few model-invoked engineering disciplines — `tdd`, `diagnosing-bugs`, `domain-modeling`, `codebase-design` — from **[mattpocock/skills](https://github.com/mattpocock/skills)** (MIT, © Matt Pocock), installed into `~/.claude/skills`. The user-invoked workflow commands (`/afk`, `/hitl`, `/to-prd`, …) are this project's own.
+The published image also installs model-invoked engineering disciplines (`tdd`, `diagnosing-bugs`, `domain-modeling`, `codebase-design`, …) as a plugin from **[mattpocock/skills](https://github.com/mattpocock/skills)** (MIT, © Matt Pocock). The user-invoked workflow commands (`/afk`, `/hitl`, `/to-prd`, …) are this project's own.
