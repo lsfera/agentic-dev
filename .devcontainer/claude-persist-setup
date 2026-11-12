@@ -53,10 +53,10 @@ fi
 
 # Install the upstream model-invoked engineering disciplines (tdd, diagnosing-bugs,
 # domain-modeling, codebase-design, …) as a Claude Code plugin — Matt Pocock's
-# mattpocock/skills, published as skills-for-real-engineers (ADR-0029). User scope, so
+# mattpocock/skills, installed as mattpocock-skills@claude-plugins-official (ADR-0029). User scope, so
 # the install state lands in the persisted ~/.claude and survives container recreation.
 # Best-effort: offline / no claude / marketplace down → warn and continue. Idempotent.
-SKILLS_PLUGIN="${AGENTIC_SKILLS_PLUGIN-skills-for-real-engineers@anthropic-plugin-directory}"
+SKILLS_PLUGIN="${AGENTIC_SKILLS_PLUGIN-mattpocock-skills@claude-plugins-official}"
 if [ -n "$SKILLS_PLUGIN" ] && command -v claude >/dev/null 2>&1; then
   if claude plugin install "$SKILLS_PLUGIN" --scope user --yes >/dev/null 2>&1; then
     echo "Installed upstream engineering-discipline skills plugin → $SKILLS_PLUGIN"

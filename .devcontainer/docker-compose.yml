@@ -84,7 +84,7 @@ services:
       GH_TOKEN: ${GH_TOKEN:-${GITHUB_TOKEN:-}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      AGENTIC_SKILLS_PLUGIN: "${AGENTIC_SKILLS_PLUGIN-skills-for-real-engineers@anthropic-plugin-directory}"
+      AGENTIC_SKILLS_PLUGIN: "${AGENTIC_SKILLS_PLUGIN-mattpocock-skills@claude-plugins-official}"
       # Context compression (headroom-ai, .sandcastle/src/context-compressor.ts) — off
       # by default (HEADROOM_MODE=off). HEADROOM_BASE_URL defaults to the sibling
       # `headroom` service below (opt-in via `--profile headroom`, since most runs
