@@ -16,7 +16,9 @@ globally with `claude plugin install <id> --scope user --yes`.
   from the Dockerfile.
 - `claude-persist-setup` runs the plugin install at container creation (user scope, so state
   lands in the persisted `~/.claude`). Override the id with `AGENTIC_SKILLS_PLUGIN`; set it
-  empty to skip (`AGENTIC_SKILLS_PLUGIN=`).
+  empty to skip (`AGENTIC_SKILLS_PLUGIN=`). The container only ships the built-in
+  `anthropic-plugin-directory` marketplace, so setup first runs `claude plugin marketplace add
+  anthropics/claude-plugins-official` (override with `AGENTIC_SKILLS_MARKETPLACE`, empty to skip).
 - Workflow slash commands (`/afk`, `/hitl`, `/exec`, `/to-prd`, `/to-issues`, `/tdd`,
   `/grill-me-with-docs`) stay vendored at `/opt/agentic-commands` — they are coupled to the
   sandcastle flow.
