@@ -52,21 +52,17 @@ if [ -d "$BAKED_COMMANDS" ]; then
 fi
 
 # Install the upstream model-invoked engineering disciplines (tdd, diagnosing-bugs,
-# domain-modeling, codebase-design) baked from mattpocock/skills (MIT) at
-# /opt/agentic-skills (ADR-0017). These are the un-forked disciplines the workflow leans on;
-# the user-invoked commands above are the project's own. Skills live in a separate
-# ~/.claude/skills namespace, so they don't collide with the slash commands. Only
-# subdirectories are copied — the baked LICENSE stays at /opt. Refreshed each create.
-BAKED_SKILLS="/opt/agentic-skills"
-if [ -d "$BAKED_SKILLS" ]; then
-  mkdir -p "${PERSIST_DATA}/skills"
-  for d in "$BAKED_SKILLS"/*/; do
-    [ -d "$d" ] || continue            # no skills baked → skip (the */ stayed literal)
-    name="$(basename "$d")"
-    rm -rf "${PERSIST_DATA}/skills/${name}"   # clean overwrite, no nested re-copy on refresh
-    cp -a "${BAKED_SKILLS}/${name}" "${PERSIST_DATA}/skills/"
-  done
-  echo "Installed upstream engineering-discipline skills → ~/.claude/skills"
+# domain-modeling, codebase-design, …) as a Claude Code plugin — Matt Pocock's
+# mattpocock/skills, published as skills-for-real-engineers (ADR-0029). User scope, so
+# the install state lands in the persisted ~/.claude and survives container recreation.
+# Best-effort: offline / no claude / marketplace down → warn and continue. Idempotent.
+SKILLS_PLUGIN="${AGENTIC_SKILLS_PLUGIN-skills-for-real-engineers@anthropic-plugin-directory}"
+if [ -n "$SKILLS_PLUGIN" ] && command -v claude >/dev/null 2>&1; then
+  if claude plugin install "$SKILLS_PLUGIN" --scope user --yes >/dev/null 2>&1; then
+    echo "Installed upstream engineering-discipline skills plugin → $SKILLS_PLUGIN"
+  else
+    echo "Warning: could not install plugin $SKILLS_PLUGIN (offline?) — skills unavailable." >&2
+  fi
 fi
 
 # Install the global cockpit-mode settings (ADR-0018): pre-allow gh, git,
