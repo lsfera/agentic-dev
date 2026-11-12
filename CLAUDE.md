@@ -92,7 +92,7 @@ path-matched mount (ADR-0011) regardless of cwd. `afk --dry-run` prints the
 resolved env without launching.
 
 The **published** image additionally bakes the workflow slash commands → `~/.claude/commands`
-and installs the upstream engineering-discipline skills as a Claude Code plugin (`skills-for-real-engineers`, ADR-0029), and
+and installs the upstream engineering-discipline skills as the `mattpocock-skills@claude-plugins-official` Claude Code plugin (ADR-0029), and
 `.devcontainer/docker-compose.yml` boots standalone without `init.sh` (every var has a
 fallback). This is what cockpit mode depends on.
 
