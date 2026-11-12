@@ -285,8 +285,7 @@ It also bakes the **workflow itself** ([ADR-0017](docs/adr/0017-bake-workflow-co
 the user-invoked slash commands (`/afk`, `/hitl`, `/exec`, `/to-prd`, `/to-issues`,
 `/tdd`, `/grill-me-with-docs`) at `/opt/agentic-commands`. At container creation
 `claude-persist-setup` installs them into `~/.claude/commands`, and installs the
-model-invoked engineering disciplines via the
-`mattpocock-skills@claude-plugins-official` plugin
+model-invoked engineering disciplines as the `skills-for-real-engineers` plugin
 ([mattpocock/skills](https://github.com/mattpocock/skills), MIT;
 [ADR-0029](docs/adr/0029-upstream-skills-via-claude-plugin.md)). The plugin install is
 best-effort (needs network); set `AGENTIC_SKILLS_PLUGIN=` (empty) to skip it, or to another

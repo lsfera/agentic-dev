@@ -7,7 +7,7 @@ ADR-0017 cloned `mattpocock/skills` in the Dockerfile, hand-picked four skills i
 `/opt/agentic-skills`, and had `claude-persist-setup` copy them into `~/.claude/skills`.
 It rejected `npx skills add` (interactive, per-project, needs node). Claude Code now has a
 first-class answer: the same repo is published as the plugin
-`mattpocock-skills@claude-plugins-official`, installable non-interactively and
+`skills-for-real-engineers@anthropic-plugin-directory`, installable non-interactively and
 globally with `claude plugin install <id> --scope user --yes`.
 
 ## Decision
@@ -26,7 +26,7 @@ globally with `claude plugin install <id> --scope user --yes`.
 - No hand-maintained skill list, ref pinning (the marketplace pins a sha) or LICENSE copy;
   updates via `claude plugin update`.
 - Plugin skills are namespaced by the plugin's manifest name (`mattpocock-skills:tdd`, even
-  though the install id is `mattpocock-skills@claude-plugins-official`).
+  though the marketplace id is `skills-for-real-engineers`).
 - The plugin ships 25 skills, not the four previously baked (~1.1k tokens always-on). Some
   (`to-spec`, `to-tickets`, `grill-with-docs`, `grill-me`) overlap in purpose with our
   `/to-prd`, `/to-issues` and `/grill-me-with-docs`. They don't replace them: the commands
