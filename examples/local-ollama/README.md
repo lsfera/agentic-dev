@@ -11,6 +11,12 @@ parallel work, not yet a drop-in for Claude on hard slices.
 - A coding model pulled, e.g. `ollama pull qwen3-coder:30b` (keep weights
   ~15–22 GB so RAM stays free for Docker + the sandbox stack).
 
+- A context window big enough for an agent. Ollama's default is small and the agent
+  then truncates silently, so start it with e.g. `OLLAMA_CONTEXT_LENGTH=32768`
+  (`OLLAMA_HOST=0.0.0.0:11434 OLLAMA_CONTEXT_LENGTH=32768 ollama serve`, or set both in
+  the Ollama app). Keep it modest with big models: the KV cache competes with the weights
+  for RAM.
+
 ## Setup
 
 ```bash
@@ -21,6 +27,8 @@ cp examples/local-ollama/opencode.json    opencode.json   # repo root; the model
 
 `opencode.json` points opencode at the host Ollama and lists the available
 models; add a model by pulling it in Ollama and adding it to the `models` map.
+`devstral-small-2` (24B, Q4_K_M, ~15 GB) is pre-listed as a lighter alternative
+(`ollama pull devstral-small-2`, then `afk local devstral-small-2`).
 Verify reachability from a container:
 
 ```bash

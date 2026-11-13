@@ -245,6 +245,9 @@ curl -s https://api.github.com/repos/lsfera/agentic-dev/releases | jq -r '.[0].t
 # → e.g. 0.2.0 ; then use ...sandbox:0.2.0
 ```
 
+The orchestrator's `GH_TOKEN` (required permissions, `scripts/setup-gh-token.sh` to create and
+verify it): [docs/github-token.md](docs/github-token.md).
+
 > **Package visibility.** The published packages (`sandbox`, `sandbox-opencode`,
 > and `devcontainer`) must be **public** to pull anonymously. If they're private,
 > run `docker login ghcr.io` on the host first (with a token that has
